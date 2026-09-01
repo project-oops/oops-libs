@@ -39,6 +39,9 @@ jobs:
 
       - name: Siblings this build needs
         run: OOPS/bin/oops bootstrap oops-libs
+        env:
+          # Empty unless the org secret exists, and empty is the old behaviour.
+          OOPS_CI_TOKEN: ${{ secrets.OOPS_CI_TOKEN }}
 
       # One step, because there is one dev command. `oops check oops-libs` relays to
       # `./bin/oops-libs check`, which runs `cargo fmt --check`, clippy at `-D warnings`
