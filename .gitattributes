@@ -1,0 +1,9 @@
+# Line endings are pinned, not left to whoever clones this.
+#
+# `core.autocrlf` is a per-machine setting, so without this file the same commit checks out
+# differently on two developers' disks and the difference arrives as a diff nobody made.
+# See OOPS conventions section 8.
+#
+# `text=auto` rather than a list of extensions: git detects binary content itself, and a list
+# only protects the extensions somebody remembered.
+* text=auto eol=lf

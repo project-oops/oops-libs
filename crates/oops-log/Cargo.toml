@@ -1,0 +1,37 @@
+[package]
+name = "oops-log"
+description = "One way to turn logging on, for every tool in the collection. Levels, a file, and OTLP when asked."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Everything past stderr is optional, because this crate is meant to be a dependency of every
+# tool including the small ones. A format library's CLI should not compile a rolling-file
+# appender - let alone an OTLP exporter and a tokio runtime - to get a `--verbose` flag.
+tracing-appender = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+
+[features]
+# Stderr and a level. That is the whole of the default build.
+default = []
+# Also write to a rolling file on disk.
+file = ["dep:tracing-appender"]
+# Also export spans over OTLP - the wire format an LGTM stack ingests. Needs a tokio runtime
+# already running in the consumer; see the crate docs.
+otlp = [
+    "dep:tracing-opentelemetry",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+]
+
+[lints]
+workspace = true

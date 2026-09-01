@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+# Versions are pinned here rather than in each crate so the four cannot drift apart, and so a
+# consumer reading one `Cargo.toml` learns what the whole library costs it.
+#
+# **Nothing here is a required dependency of every crate.** `oops-build` takes none at all;
+# `oops-paths` and `oops-log` put everything beyond the bare minimum behind a feature. That is
+# the point of the split - a CLI that wants a version string and a log level must not be made
+# to compile egui or an OTLP exporter to get them.
+[workspace.dependencies]
+# Logging. The facade and the subscriber are the whole of the default build.
+# `attributes` off: it is `#[instrument]`, which nothing here uses, and it costs a
+# proc-macro chain and a second copy of `syn` - five packages of build time for a
+# feature nobody called. Turn it back on in the crate that wants it; cargo unifies.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Rolling files, behind `oops-log/file`.
+tracing-appender = "0.2"
+# OTLP export, behind `oops-log/otlp`. These three versions are a set: tracing-opentelemetry
+# 0.28 is built against opentelemetry 0.27, and mixing majors here fails to compile in a way
+# that reads as a trait error rather than a version mismatch.
+tracing-opentelemetry = "0.28"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.27"
+
+# Platform-native data directories, behind `oops-paths/platform-dirs`. Optional because the
+# home-directory layout needs nothing but `std` - see that crate's note on why the platform
+# answer is not always the right one.
+dirs = "5"
+
+# The docs viewer. `egui` is pinned to what both GUIs already use; a mismatch here would
+# compile two copies of egui into one binary and produce type errors between them.
+egui = "0.29"
+pulldown-cmark = { version = "0.12", default-features = false }
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/project-oops/oops-libs"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }

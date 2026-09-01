@@ -1,0 +1,29 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Scratch. A one-off script belongs on somebody's disk, not in the history - and `git add -A`
+# on a repository with no commits stages everything.
+/scratch/
+*.tmp
+# No `__pycache__/` or `*.pyc` rule, deliberately. There is no Python in this repository and
+# there is not meant to be - the checks and the build scripts are shell. An ignore rule for
+# bytecode is a quiet accommodation for a language that is not allowed here: it would hide the
+# first stray file rather than let `git status` show it.
+
+# Claude Code's per-person overrides. `settings.json` beside it IS shared - SELFish uses it to
+# deny reads and edits of `escalation.*` - but the `.local` one is whoever is sitting here, and
+# tracking it means their overrides arrive in everybody else's clone. SELFish had it committed
+# as a byte-identical copy of the shared file, which is the shape this prevents.
+.claude/settings.local.json
+
+# Whatever the person editing this happens to run. None of it is anybody else's business,
+# and every one of these has been committed to some repository by accident at least once.
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

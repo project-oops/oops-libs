@@ -1,0 +1,54 @@
+name: check
+
+# Every job begins the same three steps: check out the collection, check this repository
+# out *into* it, and ask `oops bootstrap` for the siblings this project needs. See
+# docs/BUILDING.md.
+#
+# oops-libs needs no siblings - it is the common leaf, and depends on nothing. The
+# bootstrap step is kept anyway: one shape, so that reading any workflow in the collection
+# teaches you all of them, and so that the day this grows a dependency is not also the day
+# somebody discovers the preamble was special here.
+#
+# **There was no workflow in this repository at all until now.** Four projects take these
+# crates by path, so a change here reached every one of them and was checked by none of
+# them until their own pipelines failed after the fact.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: fmt, clippy and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/OOPS
+          path: OOPS
+      - uses: actions/checkout@v4
+        with:
+          path: OOPS/oops-libs
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+
+      - name: Siblings this build needs
+        run: OOPS/bin/oops bootstrap oops-libs
+
+      # One step, because there is one dev command. `oops check oops-libs` relays to
+      # `./bin/oops-libs check`, which runs `cargo fmt --check`, clippy at `-D warnings`
+      # and the tests - in CI's order, so a local failure is the failure CI would have
+      # reported rather than a different one found earlier.
+      #
+      # Every one of those passes `--workspace --all-features`, which is the only
+      # non-obvious thing about building here. `oops-log`'s file and OTLP paths and
+      # `oops-paths`'s platform layout are compiled by nothing else, and a feature nobody
+      # builds is a feature that has already stopped compiling - the one time it was left
+      # off, the OTLP path went unbuilt for a day.
+      - name: oops check oops-libs
+        run: OOPS/bin/oops check oops-libs

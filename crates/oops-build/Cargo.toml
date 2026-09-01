@@ -1,0 +1,16 @@
+[package]
+name = "oops-build"
+description = "Which build this is: commit, version and time, stamped once and said the same way everywhere."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Deliberately none, and worth keeping that way. This crate is a dependency of every binary in
+# the collection *and* a build-dependency of each one, so anything added here is compiled twice
+# for every tool. The calendar arithmetic below exists because pulling `time` or `chrono` in for
+# one formatted string was the worse trade.
+[dependencies]
+
+[lints]
+workspace = true

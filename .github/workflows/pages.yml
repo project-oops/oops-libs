@@ -1,0 +1,85 @@
+name: Deploy docs to GitHub Pages
+
+# Pages is enabled on this repository with `build_type: workflow`, and until now there was no
+# workflow - so `project-oops.github.io/oops-libs/` was a 404 that nothing would ever fill.
+# Either that setting was wrong or this file was missing. The docs are worth publishing, so it
+# was this file.
+#
+# **No landing page, and that is deliberate.** The other four each have `frontend/web/` and a
+# logo because each is a project with something to show. oops-libs is explicitly not a fifth
+# project - it is infrastructure underneath them - so it publishes its documentation and
+# nothing else, and `/` redirects straight to it rather than inventing a front page for a
+# library that does not want one.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "LICENSE-*"
+      - ".gitignore"
+      - ".gitattributes"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build site bundle
+    runs-on: ubuntu-latest
+    steps:
+      # The standard OOPS preamble, the same three steps every workflow in the collection
+      # begins with. See docs/BUILDING.md.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/OOPS
+          path: OOPS
+      - uses: actions/checkout@v4
+        with:
+          path: OOPS/oops-libs
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Siblings this build needs
+        run: OOPS/bin/oops bootstrap oops-libs
+
+      - name: Assemble bundle
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          # The shared renderer, the same one the other four call, so the five sets of docs
+          # look alike. Grey rather than a project accent: this is not one of the four, and
+          # borrowing one of their colours would suggest it is.
+          bash ../tools/build-docs.sh . site "#8b9096" "oops-libs"
+          cat > site/index.html <<'HTML'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=docs/">
+          <title>oops-libs</title>
+          <a href="docs/">oops-libs documentation</a>
+          HTML
+          du -sh site
+        working-directory: OOPS/oops-libs
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: OOPS/oops-libs/site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

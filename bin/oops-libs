@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# oops-libs - the dev CLI for the shared crates.
+#
+# The same verbs every OOPS repository carries, so `oops test oops-libs` and
+# `./bin/oops-libs test` are one command reached two ways:
+#
+#   ./bin/oops-libs build          # release build
+#   ./bin/oops-libs test           # the test suite
+#   ./bin/oops-libs lint           # clippy at -D warnings
+#   ./bin/oops-libs fmt            # format in place
+#   ./bin/oops-libs check          # everything CI checks, in CI's order
+#   ./bin/oops-libs clean          # remove build output
+#   ./bin/oops-libs doc            # build the API docs, without opening a browser
+#
+# # Why `--all-features` is not optional here
+#
+# `oops-log`'s file and OTLP paths and `oops-paths`'s platform layout are all behind cargo
+# features, and a default build compiles none of them. A feature nobody builds is a feature that
+# has already stopped compiling - so every verb below that touches the code passes
+# `--all-features`, and the one time this was left off, the OTLP path went unbuilt for a day.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Every verb runs across the workspace and every feature. There is no per-crate mode: these
+# crates exist to be taken together, and a check that passed one at a time would not have said
+# anything about the combination anybody actually depends on.
+FEATURES="--workspace --all-features"
+
+build() { cargo build $FEATURES --release; }
+test_() { cargo test $FEATURES; }
+lint() { cargo clippy $FEATURES --all-targets -- -D warnings; }
+fmt() { cargo fmt --all; }
+clean() { cargo clean; }
+doc() { cargo doc $FEATURES --no-deps; }
+
+# CI's order, so a local failure is the failure CI would have reported rather than a different
+# one found earlier.
+check() {
+    cargo fmt --all -- --check
+    lint
+    test_
+}
+
+usage() {
+    sed -n '2,20p' "$0" | sed 's|^# \{0,1\}||'
+    exit "${1:-0}"
+}
+
+cmd="${1:-check}"
+shift || true
+case "$cmd" in
+    check) check ;;
+    build) build ;;
+    test) test_ ;;
+    lint) lint ;;
+    fmt) fmt ;;
+    clean) clean ;;
+    doc) doc ;;
+    -h | --help | help) usage ;;
+    *)
+        echo "unknown verb: $cmd" >&2
+        usage 1
+        ;;
+esac
