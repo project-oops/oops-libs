@@ -147,6 +147,18 @@ impl DocsWindow {
         self.open = true;
     }
 
+    /// How wide the list of pages is.
+    const NAV_WIDTH: f32 = 190.0;
+
+    /// How much of the window it is drawn on this one takes, before anybody resizes it.
+    const SHARE: f32 = 0.9;
+
+    /// The smallest this window is allowed to be.
+    ///
+    /// Below roughly this, the fixed-width list of pages on the left leaves no usable column
+    /// for the page itself, and a reader is resizing a window to see one word per line.
+    const MINIMUM: egui::Vec2 = egui::Vec2::new(420.0, 260.0);
+
     /// Opens it at one page.
     pub fn open_at(&mut self, slug: &'static str) {
         self.open = true;
@@ -160,47 +172,132 @@ impl DocsWindow {
     }
 
     /// Draws it, if it is open. Call once per frame.
+    ///
+    /// # Why the size is a constraint and not a preference
+    ///
+    /// `default_size` sets where a window starts and bounds nothing. A window with panels
+    /// inside it and no bound sizes itself from its content - and every paragraph here is laid
+    /// out with `horizontal_wrapped`, which wraps at `ui.available_width()`.
+    ///
+    /// Those two together have no fixed point. The text asks how wide it may be, the window
+    /// answers *as wide as your content*, so nothing ever wraps: one enormous line per
+    /// paragraph, justified across a width far past the frame, painted straight over whatever
+    /// the window is sitting on. The frame stays the size it was drawn at, which is why it
+    /// looks like a container that has stopped containing.
+    ///
+    /// So the width is decided before the content is asked, and both directions are bounded to
+    /// the screen. A page too wide or too long to fit now scrolls, which is what somebody
+    /// reaches for a scrollbar expecting.
     pub fn show(&mut self, ctx: &egui::Context, docs: &[Doc]) {
         if !self.open {
             return;
         }
         let mut open = self.open;
+        // **Nine tenths of the window it is drawn on.** A size in pixels is a guess about
+        // somebody else's screen; a proportion of the thing it sits inside is not, and it is
+        // what a reader means by *a bit smaller than the window*.
+        let screen = ctx.screen_rect();
+        let most = egui::vec2(
+            (screen.width() * Self::SHARE).max(Self::MINIMUM.x),
+            (screen.height() * Self::SHARE).max(Self::MINIMUM.y),
+        );
         egui::Window::new("documentation")
             .open(&mut open)
-            .default_size([760.0, 520.0])
+            .default_size(most)
+            .min_size(Self::MINIMUM)
+            // Up to the whole window if somebody drags it there, and no further.
+            .max_size(screen.size())
+            .default_pos(screen.center())
+            .pivot(egui::Align2::CENTER_CENTER)
             .collapsible(false)
             .resizable(true)
-            .show(ctx, |ui| self.contents(ui, docs));
+            // Kept on screen, so a window dragged half off does not become one whose scrollbar
+            // cannot be reached.
+            .constrain(true)
+            // **The size goes in.** Everything inside lays out to this rather than asking how
+            // much room there is - which, in a window that sizes itself from its content, is a
+            // question whose answer depends on the answer.
+            .show(ctx, |ui| self.contents(ui, docs, most));
         self.open = open;
     }
 
     /// The window's inside: a list on the left, the page on the right.
-    fn contents(&mut self, ui: &mut egui::Ui, docs: &[Doc]) {
-        egui::SidePanel::left("docs-nav")
-            .resizable(false)
-            .default_width(190.0)
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for doc in docs {
-                        let chosen = self.selected == Some(doc.slug);
-                        if ui
-                            .selectable_label(chosen, doc.name)
-                            .on_hover_text(doc.blurb)
-                            .clicked()
-                        {
-                            self.selected = Some(doc.slug);
-                        }
-                    }
-                });
-            });
+    ///
+    /// # Why this does not use panels
+    ///
+    /// It did: a `SidePanel` and a `CentralPanel`, shown inside the window. A panel takes the
+    /// space it is given and asks for however much it wants; a window that is sizing itself
+    /// gives however much its content asks for. Neither commits to a number, and the paragraphs
+    /// below wrap at `ui.available_width()` - so nothing ever wrapped, and the text was laid
+    /// out across a width the frame had no idea about and painted straight over the window it
+    /// was supposed to be inside.
+    ///
+    /// Constraining the window did not fix it, because the panels were never reading the
+    /// constraint. Replacing them with explicit allocations did not fix it either, because the
+    /// number they were allocated from was `ui.available_size()` - and inside a window that is
+    /// sizing itself, that is not a measurement, it is the same open question wearing a
+    /// different hat. It came back enormous, the columns were allocated enormous, and the window
+    /// grew to fit them: wider than the application it was floating over.
+    ///
+    /// So the ceiling arrives from outside, worked out from the window this is drawn on before
+    /// anything here is asked anything. `most` is that ceiling; the room actually used is
+    /// whichever of it and the current size is smaller, so dragging the window narrower still
+    /// narrows the text.
+    fn contents(&mut self, ui: &mut egui::Ui, docs: &[Doc], most: egui::Vec2) {
+        let room = egui::vec2(
+            ui.available_width().min(most.x),
+            ui.available_height().min(most.y),
+        );
+        ui.set_max_size(room);
+        // The list of pages is a fixed column; the page gets the rest, less the separator. Both
+        // are floored, so a window dragged very small produces a narrow page rather than a
+        // negative width and a panic.
+        let nav = Self::NAV_WIDTH.min(room.x * 0.4);
+        let page = (room.x - nav - 12.0).max(80.0);
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| match self.selected {
-                    Some(slug) => self.page(ui, docs, slug),
-                    None => Self::index(ui, docs, &mut self.selected),
-                });
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(nav, room.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_size(egui::vec2(nav, room.y));
+                    egui::ScrollArea::vertical()
+                        .id_salt("docs-nav")
+                        .show(ui, |ui| {
+                            for doc in docs {
+                                let chosen = self.selected == Some(doc.slug);
+                                if ui
+                                    .selectable_label(chosen, doc.name)
+                                    .on_hover_text(doc.blurb)
+                                    .clicked()
+                                {
+                                    self.selected = Some(doc.slug);
+                                }
+                            }
+                        });
+                },
+            );
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                egui::vec2(page, room.y),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    // **The number every wrap below reads.** Set before a single word is laid
+                    // out, so `available_width` answers with this rather than with a question.
+                    ui.set_min_size(egui::vec2(page, room.y));
+                    ui.set_max_size(egui::vec2(page, room.y));
+                    // **Both directions.** Wrapping handles prose, but a code block is one long
+                    // line by nature and a table has the width it has. Vertical-only scrolling
+                    // left those with nowhere to go but outwards.
+                    egui::ScrollArea::both()
+                        .id_salt("docs-page")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match self.selected {
+                            Some(slug) => self.page(ui, docs, slug),
+                            None => Self::index(ui, docs, &mut self.selected),
+                        });
+                },
+            );
         });
     }
 
