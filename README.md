@@ -81,8 +81,10 @@ the Rust ecosystem convention.
 ## Where it sits
 
 Not one of the four. **OOPS** is Orbistoun, obSCEne, Prosperous and SELFish - four projects
-aimed at one console's operating system. This is infrastructure underneath them, and it is a
-fifth repository rather than a fifth project.
+aimed at one console's operating system. This is infrastructure underneath them, one of two
+libraries rather than a fifth project: oops-libs is the Rust the host-side tools share, and its
+sibling [oops-sdk](https://github.com/project-oops/oops-sdk) is the freestanding C the
+target-side payloads link. Nothing links both.
 
 Shared rules - provenance, naming, decision logs, honest failure, gates - live in
 [the OOPS conventions](https://github.com/project-oops/OOPS/blob/main/docs/CONVENTIONS.md) and are
