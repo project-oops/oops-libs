@@ -109,20 +109,32 @@ pub fn emit() {
     let suffix = if dirty { "-dirty" } else { "" };
     println!("cargo:rustc-env={COMMIT_ENV}={short}{suffix}");
 }
-
-/// Re-run when the commit moves or the index changes, and not on every build.
+/// Re-run when the commit moves, and not on every build.
 ///
 /// Naming a path that does not exist makes cargo re-run the script on **every** build, so a
 /// source tarball with no `.git` would pay a rebuild for a stamp it can never have. The
 /// directory is found by walking up rather than hardcoded, because the depth from a crate to
 /// the repository root differs across these projects and a wrong relative path fails silently.
+///
+/// # What `HEAD` alone does and does not buy
+///
+/// `.git/index` was watched here too, and is not any more. Watching it caught more: git rewrites
+/// the index whenever it refreshes its stat cache, so an ordinary `git status` after an edit was
+/// enough to re-run this script and refresh the `-dirty` suffix. It also cost a rebuild for every
+/// `git add` and every `git status`, which is most of them, for a suffix that was already only
+/// approximately live.
+///
+/// **So `-dirty` is refreshed when the commit moves, and can otherwise be one build behind.**
+/// Edit a tracked file, rebuild without committing, and the stamp may still say what it said
+/// before. That was true with the index watched as well - editing a file touches neither `HEAD`
+/// nor `index` until some git command intervenes - so this narrows a window that was never
+/// closed rather than opening one. [`Stamp::is_exact`] is the question to ask regardless: it is
+/// false for a local build with no commit at all, which is the case that actually misleads.
 fn watch_git() {
     let Some(root) = repo_root() else { return };
-    for name in ["HEAD", "index"] {
-        let watched = root.join(name);
-        if watched.exists() {
-            println!("cargo:rerun-if-changed={}", watched.display());
-        }
+    let head = root.join("HEAD");
+    if head.exists() {
+        println!("cargo:rerun-if-changed={}", head.display());
     }
 }
 
