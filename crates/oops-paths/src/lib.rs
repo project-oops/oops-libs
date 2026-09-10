@@ -92,7 +92,7 @@ pub const PORTABLE_NOTE: &str = "PORTABLE.txt";
 ///
 /// # One directory, not one per project
 ///
-/// Because they are about the same console and the same titles. Prosperous pulls a save off
+/// Because they are about the same platform and the same titles. Prosperous pulls a save off
 /// real hardware; Orbistoun mounts it. obSCEne records which machine it probed; Prosperous
 /// already knows that machine's address. Cheats, titles, reports and the address book are all
 /// facts about the platform rather than possessions of one tool.
