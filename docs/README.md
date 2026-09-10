@@ -43,14 +43,15 @@ and is the one word this repository turns on: everything here runs on the **host
 a tool is used from - and never on the target. Its sibling
 [oops-sdk](https://github.com/project-oops/oops-sdk) is the target-side half.
 
-## Adding to a log
+## Adding to a decision
 
-The long-running documents are **directories with a generated index**. Add a file under
-`decisions/`, `backlog/` or `worklog/`, then regenerate the table:
+The decision log is a **directory with a generated index**. This repository keeps only that one -
+there is no `backlog/` or `worklog/` here, and the shared tooling's verbs for them are not
+wired up because there is nothing to wire them to. Add a file under `decisions/`, then
+regenerate the table:
 
 ```bash
 tools/split-decisions.sh --index oops-libs
-tools/split-doc.sh --index oops-libs BACKLOG 2 backlog
 ```
 
 Do not edit the index by hand - it is overwritten. The split exists because two sessions

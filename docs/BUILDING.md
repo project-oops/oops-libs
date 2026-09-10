@@ -28,23 +28,15 @@ actually depends on.
 
 ## The verbs
 
-The same seven every OOPS repository carries, so `oops test oops-libs` and
-`./bin/oops-libs test` are one command reached two ways.
+The same ones every OOPS repository carries, so `oops test oops-libs` and `./bin/oops-libs test`
+are one command reached two ways. They are defined once, in
+[the collection's BUILDING.md](https://github.com/project-oops/OOPS/blob/main/docs/BUILDING.md#the-verbs),
+and **this repository adds none of its own** - so they are not restated here, where a third copy
+could only drift. `./bin/oops-libs --help` prints them from the script itself.
 
-| verb | what it does |
-|---|---|
-| `build` | `cargo build --workspace --all-features --release` |
-| `test` | `cargo test --workspace --all-features` |
-| `lint` | clippy, all targets and all features, at `-D warnings` |
-| `fmt` | `cargo fmt --all` |
-| `check` | `fmt --check`, then `lint`, then `test` - in that order |
-| `clean` | `cargo clean` |
-| `doc` | `cargo doc --no-deps`, all features |
+What is local is above: every verb passes `--all-features`, and there is no per-crate mode.
 
-`check` runs its steps in the order CI would, so a local failure is the failure CI would have
-reported rather than a different one found earlier.
-
-## The four crates
+## The crates
 
 | crate | what it is | what it costs you |
 |---|---|---|
@@ -53,7 +45,7 @@ reported rather than a different one found earlier.
 | `oops-paths` | where a tool keeps what it writes, portable mode included | nothing by default; the platform layout behind a feature |
 | `oops-docs` | documentation shipped inside the binary, and an egui window for it | `egui`, `pulldown-cmark` |
 
-Versions are pinned in the workspace `Cargo.toml` rather than in each crate, so the four
+Versions are pinned in the workspace `Cargo.toml` rather than in each crate, so they
 cannot drift apart and a consumer reading one manifest learns what the whole library costs.
 
 ## What CI runs
@@ -63,8 +55,10 @@ over `./bin/oops-libs check`, the same command reached the same way a person rea
 
 **There was no workflow here at all until recently.** All four projects take these crates by
 path, so a change here reached every one of them and was checked by none of them until their
-own pipelines failed afterwards - which, since none of those pipelines has ever executed
-either, meant not at all.
+own pipelines failed afterwards - which, **as things stood on 2026-09-01**, meant not at all:
+no pipeline in the collection had ever run. That is no longer true. Every project's workflow now
+triggers on push to `main` and on `pull_request`, and every repository has commits on `main`, so
+a change here is checked here and again wherever it lands.
 
 The job still runs `oops bootstrap oops-libs` even though this repository needs no siblings.
 One shape, so that reading any workflow in the collection teaches you all of them, and so the

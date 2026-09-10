@@ -469,14 +469,14 @@ fn render_spans(
     // a whole sentence on the next line.
     for span in spans {
         match span.link.as_deref() {
-            Some(target) => {
+            Some(dest) => {
                 if ui.link(style(span)).clicked() {
                     // A link to another shipped page opens it here rather than in a browser -
                     // the whole point of embedding them is that they work with no network.
-                    if let Some(doc) = resolve(target, docs) {
+                    if let Some(doc) = resolve(dest, docs) {
                         *follow = Some(doc);
-                    } else if target.starts_with("http") {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(target));
+                    } else if dest.starts_with("http") {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(dest));
                     }
                 }
             }
@@ -498,17 +498,23 @@ fn render_spans(
 ///
 /// Matches on the file stem, so `../features/running.md`, `running.md` and `running` all reach
 /// the same page - which is what a document written for a repository browser will contain.
-fn resolve(target: &str, docs: &[Doc]) -> Option<&'static str> {
-    if target.starts_with("http") {
+///
+/// `dest` rather than `target`, which is what `pulldown-cmark` calls it and is the only sense of
+/// that word this repository has left. The collection now spends `target` three ways and names a
+/// qualifier for each: a **registered target** is a machine Prosperous knows, a **build target**
+/// is what an artifact is built for, an **install target** is where a manifest puts one - and
+/// cargo keeps it for a build directory. A markdown link's destination should not be a fifth.
+fn resolve(dest: &str, docs: &[Doc]) -> Option<&'static str> {
+    if dest.starts_with("http") {
         return None;
     }
-    let stem = target
+    let stem = dest
         .rsplit(['/', '\\'])
         .next()
-        .unwrap_or(target)
+        .unwrap_or(dest)
         .split('#')
         .next()
-        .unwrap_or(target)
+        .unwrap_or(dest)
         .trim_end_matches(".md");
     docs.iter().find(|d| d.slug == stem).map(|d| d.slug)
 }

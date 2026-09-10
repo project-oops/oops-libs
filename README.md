@@ -28,7 +28,7 @@ rather than a defect.
 Two copies of a thing do not stay two copies of the same thing.
 
 The counter-case is just as important. Logging looked like an obvious candidate and is not:
-the two projects that appear to have logging modules have a *console system-log reader* and a
+the two projects that appear to have logging modules have a *target's system-log reader* and a
 *guest call tracer*, which are domain code that happen to share a word. There was nothing to
 extract, so `oops-log` is new work rather than a merge - and it is thin on purpose.
 
@@ -81,7 +81,7 @@ the Rust ecosystem convention.
 ## Where it sits
 
 Not one of the four. **OOPS** is Orbistoun, obSCEne, Prosperous and SELFish - four projects
-aimed at one console's operating system. This is infrastructure underneath them, one of two
+aimed at one platform's operating system. This is infrastructure underneath them, one of two
 libraries rather than a fifth project: oops-libs is the Rust the host-side tools share, and its
 sibling [oops-sdk](https://github.com/project-oops/oops-sdk) is the freestanding C the
 target-side payloads link. Nothing links both.

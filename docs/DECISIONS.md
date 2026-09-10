@@ -22,6 +22,7 @@ choice being re-litigated by somebody who only has the choice.
 | 🟢 | D012 | [The documentation reader ships with pages, or it is not finished](decisions/D012-the-documentation-reader-ships-with.md) | decided | 2026-08-30 |
 | 🟢 | D013 | [One directory for the collection, not one per tool](decisions/D013-one-directory-for-the-collection-not.md) | decided | 2026-08-30 |
 | 🟢 | D014 | [Two roots, because a roaming profile is not a place for four gigabytes](decisions/D014-two-roots-because-a-roaming-profile-is.md) | decided | 2026-08-30 |
+| 🟢 | D015 | [The console registry belongs to Prosperous, and oops-paths gains nothing](decisions/D015-the-console-registry-belongs-to.md) | decided | 2026-09-09 |
 
 | | meaning |
 |---|---|

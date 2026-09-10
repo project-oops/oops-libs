@@ -82,6 +82,12 @@ use std::path::{Path, PathBuf};
 /// them at once - which is what somebody unpacking a bundle onto a stick expects.
 pub const PORTABLE_DIR: &str = ".portable";
 
+/// The file written inside the sentinel to say what that directory is for.
+///
+/// The *name* is shared, so a note is in the same place whichever tool wrote it. The *words* are
+/// not - they name a tool, so they arrive as an argument. See [`enable_portable_sentinel`].
+pub const PORTABLE_NOTE: &str = "PORTABLE.txt";
+
 /// The directory every project in the collection writes to.
 ///
 /// # One directory, not one per project
@@ -559,13 +565,47 @@ fn home_dir() -> Option<PathBuf> {
 
 /// Marks a directory as a portable installation by creating the sentinel.
 ///
+/// A `.portable` **file** found in the way is removed first. It is not a marker of the wrong
+/// shape that could be left alone: the sentinel and the portable root are the same path, so a
+/// file with that name *is* the root, occupied by something no write can go into.
+/// [`Paths::resolve_found`] tests it with `exists()`, which a file satisfies, so such a run is
+/// already portable and already rooted there - every write beneath it fails, this one included,
+/// and the failure arrives on first run rather than at the call that set the mode. The
+/// marker-*file* convention is the common one: a sibling in the collection shipped it and hit
+/// exactly this, and somebody creating one by hand arrives at the same place.
+///
+/// # The note is the caller's words
+///
+/// `note` is written inside the sentinel as [`PORTABLE_NOTE`], saying what the directory does
+/// and how to undo it, so it is not a mystery folder somebody finds later. The words name a
+/// tool, so they cannot live here - and they arrive as an argument rather than being each
+/// caller's own business because the alternative is each caller keeping a copy of this entire
+/// function, which is the duplication the argument exists to end.
+///
+/// `None` writes **no file**, rather than an empty one. A zero-byte note beside the sentinel
+/// reads as a write that failed and sends somebody investigating; an absent one reads as a
+/// caller with nothing to say, which is what it is.
+///
 /// # Errors
 ///
-/// If the directory cannot be created - typically an installation directory the user cannot
-/// write to, which is exactly the case where they wanted portable mode and cannot have it, so it
-/// is worth reporting rather than swallowing.
-pub fn enable_portable_sentinel(binary_dir: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(binary_dir.join(PORTABLE_DIR))
+/// If the stale file cannot be removed; if the directory cannot be created - typically an
+/// installation directory the user cannot write to, which is exactly the case where they wanted
+/// portable mode and cannot have it, so it is worth reporting rather than swallowing; or if the
+/// note cannot be written. **A failed note fails the call.** A sentinel with nothing in it is a
+/// half-made thing, and a caller that asked for a note and did not get one should hear so.
+pub fn enable_portable_sentinel(binary_dir: &Path, note: Option<&str>) -> io::Result<()> {
+    let sentinel = binary_dir.join(PORTABLE_DIR);
+    // `is_file` and not `exists`: a directory here is the sentinel already in place, which is
+    // the ordinary repeat call and must stay silent.
+    if sentinel.is_file() {
+        std::fs::remove_file(&sentinel)?;
+    }
+    std::fs::create_dir_all(&sentinel)?;
+    let Some(body) = note else {
+        return Ok(());
+    };
+    // After the directory, necessarily - and returned rather than dropped.
+    std::fs::write(sentinel.join(PORTABLE_NOTE), body)
 }
 
 #[cfg(test)]
@@ -783,5 +823,86 @@ mod tests {
         // Nothing is set in the test environment; what is pinned is that reading a hyphenated
         // name does not panic and produces the empty answer.
         assert_eq!(snapshot, EnvSnapshot::default());
+    }
+
+    /// A directory of this crate's own under the system's temporary one.
+    ///
+    /// Written by hand because `oops-paths` has no dev-dependencies either: a crate whose whole
+    /// argument is that it costs its consumers nothing should not reach for a crate to test
+    /// itself with.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("oops-paths-{}-{tag}", std::process::id()));
+        // A run that failed before its own cleanup leaves this behind, and a test that inherits
+        // it is testing whatever the last one left.
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the system temporary directory should be writable");
+        dir
+    }
+
+    #[test]
+    fn a_stale_portable_file_is_healed_rather_than_left_to_fail_every_write() {
+        // The only test here that touches a real filesystem, because this is a defect about
+        // what is on one: the sentinel and the portable root are the same path, so a `.portable`
+        // *file* is not a marker of the wrong shape - it is the root, occupied.
+        let dir = scratch("stale-sentinel");
+        let sentinel = dir.join(PORTABLE_DIR);
+        std::fs::write(&sentinel, b"the marker an older scheme wrote").expect("should write");
+
+        // The trap in full: the file already does the sentinel's job, so the run is portable
+        // and rooted at a path nothing can be created beneath.
+        let mut here = process(false, None, Some("app"));
+        here.binary_dir = Some(dir.clone());
+        let (paths, _) = Paths::resolve_found("app", Layout::default(), &here);
+        assert!(
+            paths.is_portable(),
+            "`exists()` is true of the file, so this run is already portable"
+        );
+        assert_eq!(paths.data_root(), sentinel);
+        assert!(
+            paths.ensure_dirs().is_err(),
+            "nothing can be created beneath a file, which is what makes this worth healing"
+        );
+
+        enable_portable_sentinel(&dir, None)
+            .expect("should heal the stale file rather than fail on it");
+        assert!(
+            sentinel.is_dir(),
+            "the sentinel is the root, so it has to be a directory"
+        );
+        paths
+            .ensure_dirs()
+            .expect("the same run should now have somewhere to write");
+
+        // Enabling twice is the ordinary case - a build that marks itself portable on every
+        // start - and must stay silent.
+        enable_portable_sentinel(&dir, None).expect("should be idempotent");
+        assert!(sentinel.is_dir());
+
+        std::fs::remove_dir_all(&dir).expect("should clean up after itself");
+    }
+
+    #[test]
+    fn the_note_is_the_callers_words_and_no_file_at_all_without_them() {
+        let dir = scratch("sentinel-note");
+        let sentinel = dir.join(PORTABLE_DIR);
+
+        // Nothing to say, so nothing written. An empty `PORTABLE.txt` would read as a write that
+        // failed, and somebody would eventually go looking for what went wrong with it.
+        enable_portable_sentinel(&dir, None).expect("should create the sentinel");
+        assert!(sentinel.is_dir());
+        assert!(
+            !sentinel.join(PORTABLE_NOTE).exists(),
+            "no note is the honest answer; an empty one is a puzzle"
+        );
+
+        // The words name a tool, which is why they are the caller's and not this crate's.
+        let body = "This directory makes the tool run in portable mode.\n";
+        enable_portable_sentinel(&dir, Some(body)).expect("should write the note");
+        assert_eq!(
+            std::fs::read_to_string(sentinel.join(PORTABLE_NOTE)).expect("should read back"),
+            body
+        );
+
+        std::fs::remove_dir_all(&dir).expect("should clean up after itself");
     }
 }
