@@ -32,6 +32,13 @@
 //! Both variables take the full [`EnvFilter`] syntax, so a directive can be per-module:
 //! `OOPS_LOG=warn,orbistoun_loader=debug`.
 //!
+//! **The default holds the render crates down.** When neither variable is set, the requested
+//! level applies to everything except `wgpu`, `wgpu_core`, `wgpu_hal` and `naga`, which are
+//! capped at `warn` - a wgpu-backed window logs `Device::maintain` at INFO every frame, and that
+//! flood is not what a tool at `info` is trying to show. It is a cap, not an override: it only
+//! quietens crates the requested level would otherwise make chatty (`info` and below), and an
+//! explicit `OOPS_LOG`/`RUST_LOG` is taken whole, so `OOPS_LOG=trace` still gets wgpu at trace.
+//!
 //! [`EnvFilter`]: tracing_subscriber::EnvFilter
 //!
 //! # Where the lines go
@@ -149,6 +156,43 @@ impl Logging {
         self
     }
 
+    /// The filter used when neither environment variable names one.
+    ///
+    /// The requested level for everything, with the render crates a wgpu-backed window pulls in -
+    /// `wgpu`, its core and HAL, and the `naga` shader translator - held down to `warn`.
+    ///
+    /// # Why these, and why here
+    ///
+    /// `wgpu_core` logs `Device::maintain: waiting for submission index …` at **INFO**, several
+    /// times a second, once per frame a window is drawing. At the collection's default of `info`
+    /// that buries a tool's own output under per-frame GPU bookkeeping nobody asked to read. It
+    /// is dampened in this shared crate rather than in each window because every wgpu-backed tool
+    /// here (the orbistoun and prosperous windows) inherits the same flood from the same cause,
+    /// and one of them silencing it privately is the drift this collection exists to prevent.
+    ///
+    /// # Only dampened, never amplified
+    ///
+    /// The directives are added **only when the requested level is more verbose than `warn`** -
+    /// `info`, `debug`, `trace`. A tool run at `warn` or `error` is left exactly as asked, because
+    /// pinning these crates to `warn` there would *raise* them above the global and turn a request
+    /// for quiet into more noise. And this is the default only: an explicit `OOPS_LOG` or
+    /// `RUST_LOG` is taken whole and untouched, so `OOPS_LOG=trace` still gets wgpu at trace.
+    fn default_filter(level: Level) -> EnvFilter {
+        let base = EnvFilter::new(level.to_string());
+        if level <= Level::WARN {
+            return base;
+        }
+        ["wgpu=warn", "wgpu_core=warn", "wgpu_hal=warn", "naga=warn"]
+            .into_iter()
+            .fold(base, |filter, directive| {
+                filter.add_directive(
+                    directive
+                        .parse()
+                        .expect("a literal render-crate directive parses"),
+                )
+            })
+    }
+
     /// Turn it on.
     ///
     /// # Returns
@@ -165,7 +209,7 @@ impl Logging {
     pub fn init(self) -> Guard {
         let filter = EnvFilter::try_from_env(LEVEL_ENV)
             .or_else(|_| EnvFilter::try_from_default_env())
-            .unwrap_or_else(|_| EnvFilter::new(self.level.to_string()));
+            .unwrap_or_else(|_| Self::default_filter(self.level));
 
         // Stderr, never stdout: a tool that logs to stdout corrupts whatever is being piped
         // out of it, and every one of these tools has an output somebody redirects.
@@ -373,5 +417,30 @@ mod tests {
         // Pinned because it is written into CI, run scripts and documentation across four
         // repositories; renaming it silently turns every one of those into a no-op.
         assert_eq!(LEVEL_ENV, "OOPS_LOG");
+    }
+
+    /// **A verbose default caps the render crates; a quiet one is left alone.** The filter's
+    /// `Display` reproduces its directives, so a substring check is enough to say whether the cap
+    /// was applied - and applying it at `warn`/`error` would be raising these crates, not
+    /// dampening them, which is the mistake this guards against.
+    #[test]
+    fn the_default_holds_wgpu_down_only_when_that_is_quieter() {
+        // wgpu logs `Device::maintain` at INFO every frame, so at info and below it is capped.
+        for verbose in [Level::INFO, Level::DEBUG, Level::TRACE] {
+            let shown = Logging::default_filter(verbose).to_string();
+            assert!(
+                shown.contains("wgpu_core=warn"),
+                "at {verbose} the render crates should be capped: {shown}"
+            );
+        }
+        // At warn or error, adding `wgpu_core=warn` would make it noisier, not quieter, so the
+        // requested level is left to stand on its own.
+        for quiet in [Level::WARN, Level::ERROR] {
+            let shown = Logging::default_filter(quiet).to_string();
+            assert!(
+                !shown.contains("wgpu"),
+                "at {quiet} nothing should be raised to warn: {shown}"
+            );
+        }
     }
 }
