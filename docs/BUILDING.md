@@ -42,7 +42,7 @@ What is local is above: every verb passes `--all-features`, and there is no per-
 |---|---|---|
 | `oops-build` | which build this is: commit, version, build time, one line | nothing - no dependencies at all |
 | `oops-log` | turning logging on, the same way everywhere | `tracing` and `tracing-subscriber`; files and OTLP behind features |
-| `oops-paths` | where a tool keeps what it writes, portable mode included | nothing by default; the platform layout behind a feature |
+| `oops-paths` | where a tool keeps what it writes, portable mode included | `dirs`, behind the default `platform-dirs` feature; nothing at all with that feature off (the home-directory layout) |
 | `oops-docs` | documentation shipped inside the binary, and an egui window for it | `egui`, `pulldown-cmark` |
 
 Versions are pinned in the workspace `Cargo.toml` rather than in each crate, so they

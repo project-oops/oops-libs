@@ -4,7 +4,7 @@ Welcome to the **oops-libs** developer guide.
 
 This guide provides practical instructions for **Rust developers and contributors** building host-side command-line or GUI utilities within the OOPS ecosystem.
 
-If you are an AI coding agent or systems architect seeking individual crate source listings or compile-time macro designs, see the **[Technical Reference](README.md)**.
+If you are an AI coding agent or systems architect seeking the crate catalog, API surface, and role in THE LOOP, see the **[Technical Reference](../README.md)**.
 
 ---
 
@@ -29,22 +29,38 @@ Rather than each tool inventing its own configuration directory or scattering fi
 | **Linux / macOS** | `~/.local/share/OOPS/` (or `$XDG_DATA_HOME/OOPS/`) |
 
 ### Standard Directory Hierarchy:
+
+`oops-paths` resolves **two roots**: a *data root* for what a person would want on their next
+machine, and a *cache root* for what can be rebuilt. On platforms that distinguish them (Windows
+roaming vs. local, `~/.local/share` vs. `~/.cache`) they differ; in a portable run they are the
+same directory.
+
 ```text
-%APPDATA%\OOPS\
-├── targets/         <- Registered console targets (shared between pros and orbistoun)
-├── titles/          <- Staged titles and homebrew applications
-├── saves/           <- Mounted game save files and overlays
-├── reports/         <- Conformance probe outputs and hardware logs
-└── logs/            <- Runtime session telemetry
+%APPDATA%\OOPS\               <- data root: kept, worth carrying to the next machine
+├── orbistoun.toml            <- this tool's config file, named after the tool
+└── titles/                   <- per-title data, shared between pros and orbistoun
+
+%LOCALAPPDATA%\OOPS\          <- cache root: rebuildable (same as the data root when portable)
+├── cache/                    <- regenerable material; deleting the whole directory is safe
+└── logs/                     <- rolling log files
 ```
+
+`oops-paths` names only these locations. Concepts belonging to one tool - a console/target
+registry, for instance - stay in that tool, so there is no `targets/`, `saves/` or `reports/`
+directory here.
 
 ### Using in Rust:
 ```rust
 use oops_paths::Paths;
 
-let paths = Paths::resolve()?;
-let targets_dir = paths.targets_dir();
-let reports_dir = paths.reports_dir();
+// Infallible, and named after the calling tool - there is always an answer.
+let paths = Paths::resolve("orbistoun");
+paths.ensure_dirs()?;                       // create the directories, failing early and once
+
+let logs_dir = paths.logs_dir();            // <cache-root>/logs
+let cache_dir = paths.cache_dir();          // <cache-root>/cache
+let config = paths.config_file();           // <data-root>/orbistoun.toml
+let title = paths.title_dir("CUSA00001");   // <data-root>/titles/CUSA00001
 ```
 
 ---
@@ -76,19 +92,21 @@ $env:OOPS_LOG = "info,pros_link=trace,orbistoun_hle=debug"
 
 ## 3. Deterministic Build Stamps (`oops-build`)
 
-`oops-build` provides a zero-dependency `build.rs` helper that injects the current git commit hash, dirty status, and target architecture into your binary:
+`oops-build` provides a zero-dependency `build.rs` helper that stamps the current git commit - with a `-dirty` suffix when the working tree is modified - into your binary:
 
 In `build.rs`:
 ```rust
 fn main() {
-    oops_build::stamp();
+    oops_build::emit();
 }
 ```
 
 In your binary's `main.rs`:
 ```rust
-println!("Tool version: {}", oops_build::version_string!());
-// Output: "pros 0.1.0 (commit abc1234, dirty, x86_64-pc-windows-msvc)"
+println!("Tool version: {}", oops_build::line!());
+// Output: "v0.1.0 - abc1234"
+//   or    "v0.1.0 - abc1234-dirty"                    (built from a modified tree)
+//   or    "v0.1.0 - built 2026-08-29 14:03 UTC"       (no commit, e.g. outside a repo)
 ```
 
 ---
@@ -99,8 +117,8 @@ Add the path dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-oops-paths = { path = "../oops-libs/crates/oops-paths" }
-oops-log = { path = "../oops-libs/crates/oops-log" }
-oops-build = { path = "../oops-libs/crates/oops-build" }
+oops-paths = { path = "../../oops-libs/crates/oops-paths" }
+oops-log = { path = "../../oops-libs/crates/oops-log" }
+oops-build = { path = "../../oops-libs/crates/oops-build" }
 ```
 

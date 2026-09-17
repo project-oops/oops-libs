@@ -4,7 +4,7 @@
 
 `oops-libs` is the collection of shared, lightweight Rust crates used by all host-side tools in the OOPS collection ([Prosperous](../prosperous/), [SELFish](../selfish/), [Orbistoun](../orbistoun/), and `obscene-tool`). It unifies build stamps, logging, shared application paths, and embedded documentation without pulling heavy runtime dependencies into simple CLI tools.
 
-| 📖 **[Host Developer Guide](docs/USER_GUIDE.md)** | ⚙️ **[Technical Reference & Crate Catalog](README.md)** |
+| 📖 **[Host Developer Guide](docs/USER_GUIDE.md)** | ⚙️ **[Technical Reference & Crate Catalog](#crates-overview)** |
 | :--- | :--- |
 | *Unified paths, OOPS_LOG configuration, and build stamping.* | *Crate architecture, API surface, and role in THE LOOP.* |
 
@@ -17,7 +17,7 @@ Within the [OOPS ecosystem](../docs/THE_LOOP.md), `oops-libs` provides the **Uni
 ```
 ┌───────────────────────────────────────────────────────────┐
 │ oops-paths: One Directory, Shared                         │
-│ Windows: %APPDATA%\OOPS\      Linux: ~/.local/share/OOPS\ │
+│ Windows: %APPDATA%\OOPS\      Linux: ~/.local/share/OOPS/ │
 └─────────────────────────────┬─────────────────────────────┘
                               │
        ┌──────────────────────┼──────────────────────┐
@@ -59,9 +59,9 @@ oops-build = { path = "../../oops-libs/crates/oops-build" }
 
 | Crate | Purpose | Dependencies |
 |---|---|---|
-| **`oops-build`** | Generates build-time metadata (git commit, branch, build timestamp, dirty state). | None |
+| **`oops-build`** | Generates build-time metadata (git commit, build timestamp, dirty state). | None |
 | **`oops-log`** | Configures `tracing` subscribers with optional file and OTLP output features. | `tracing`, `tracing-subscriber` |
-| **`oops-paths`** | Canonical platform paths for config, cache, logs, and portable mode (`PORTABLE.txt`). | `platform-dirs` |
+| **`oops-paths`** | Canonical platform paths for config, cache, logs, and portable mode (`PORTABLE.txt`). | `dirs` (`platform-dirs` feature, on by default) |
 | **`oops-docs`** | In-app Markdown documentation viewer and embedded egui window. | `egui`, `pulldown-cmark` |
 
 ---
