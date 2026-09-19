@@ -116,26 +116,58 @@ pub fn emit() {
 /// directory is found by walking up rather than hardcoded, because the depth from a crate to
 /// the repository root differs across these projects and a wrong relative path fails silently.
 ///
-/// # What `HEAD` alone does and does not buy
+/// # Why `HEAD` alone is not enough, and what is watched instead
 ///
-/// `.git/index` was watched here too, and is not any more. Watching it caught more: git rewrites
-/// the index whenever it refreshes its stat cache, so an ordinary `git status` after an edit was
-/// enough to re-run this script and refresh the `-dirty` suffix. It also cost a rebuild for every
-/// `git add` and every `git status`, which is most of them, for a suffix that was already only
-/// approximately live.
+/// On a branch, `.git/HEAD` holds `ref: refs/heads/<branch>` and **does not change when a commit
+/// lands** - only the ref it names does. Watching `HEAD` alone therefore misses every commit on a
+/// branch, which is the ordinary case: the stamp goes stale and names whatever commit happened to be
+/// checked out the last time the script ran for some other reason. So this also watches the ref
+/// `HEAD` points at, and the reflog `logs/HEAD`, which records every move of `HEAD` - commit,
+/// checkout, reset - whether the ref is loose or packed. Between them a commit on the checked-out
+/// branch re-runs the script and refreshes the stamp.
 ///
-/// **So `-dirty` is refreshed when the commit moves, and can otherwise be one build behind.**
-/// Edit a tracked file, rebuild without committing, and the stamp may still say what it said
-/// before. That was true with the index watched as well - editing a file touches neither `HEAD`
-/// nor `index` until some git command intervenes - so this narrows a window that was never
-/// closed rather than opening one. [`Stamp::is_exact`] is the question to ask regardless: it is
-/// false for a local build with no commit at all, which is the case that actually misleads.
+/// `.git/index` was watched here too, and is not any more. Watching it caught the `-dirty` suffix
+/// sooner - git rewrites the index whenever it refreshes its stat cache, so a `git status` after an
+/// edit re-ran this - but it cost a rebuild for every `git add` and `git status`, most of them, for a
+/// suffix that was already only approximately live. Editing a tracked file still touches none of
+/// these until some git command intervenes, so `-dirty` can be one build behind; [`Stamp::is_exact`]
+/// is the question to ask regardless, being false for a local build with no commit at all.
 fn watch_git() {
     let Some(root) = repo_root() else { return };
     let head = root.join("HEAD");
-    if head.exists() {
-        println!("cargo:rerun-if-changed={}", head.display());
+    if !head.exists() {
+        return;
     }
+    println!("cargo:rerun-if-changed={}", head.display());
+    // The ref `HEAD` names - the file that actually advances when a branch commit lands.
+    if let Some(reference) = head_reference(&head) {
+        let ref_path = root.join(&reference);
+        if ref_path.exists() {
+            println!("cargo:rerun-if-changed={}", ref_path.display());
+        }
+    }
+    // The reflog, a catch-all: it appends on every move of `HEAD`, and covers a packed ref that has
+    // no loose file of its own.
+    let reflog = root.join("logs").join("HEAD");
+    if reflog.exists() {
+        println!("cargo:rerun-if-changed={}", reflog.display());
+    }
+}
+
+/// The ref `HEAD` names, e.g. `refs/heads/main`, when it is a symbolic ref.
+///
+/// `None` for a detached `HEAD` - whose own file already changes on a commit - or an unreadable one.
+fn head_reference(head: &Path) -> Option<String> {
+    parse_head_reference(&std::fs::read_to_string(head).ok()?)
+}
+
+/// The ref a `HEAD` file's contents name, split out from the read so it can be tested without a file.
+///
+/// `HEAD` is either `ref: <path>\n` (on a branch) or a bare commit id (detached); only the first
+/// names a ref to follow, and only a non-empty one.
+fn parse_head_reference(contents: &str) -> Option<String> {
+    let reference = contents.strip_prefix("ref:")?.trim();
+    (!reference.is_empty()).then(|| reference.to_owned())
 }
 
 /// The nearest `.git` at or above the crate being built, if there is one.
@@ -364,6 +396,25 @@ macro_rules! line {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A branch `HEAD` names its ref to follow; a detached one names nothing.** The bug this
+    /// closes: on a branch `HEAD` is a static `ref:` line, so watching it alone missed every commit
+    /// and the stamp went stale. Following the ref it names is what re-runs the stamp on a commit.
+    #[test]
+    fn a_symbolic_head_names_its_ref_and_a_detached_one_does_not() {
+        assert_eq!(
+            parse_head_reference("ref: refs/heads/main\n").as_deref(),
+            Some("refs/heads/main")
+        );
+        assert_eq!(
+            parse_head_reference("ref: refs/heads/feature/x\n").as_deref(),
+            Some("refs/heads/feature/x")
+        );
+        // A detached HEAD is a bare commit id, whose own file changes on a commit - no ref to follow.
+        assert_eq!(parse_head_reference("b4f7e73aabbccddeeff0011\n"), None);
+        assert_eq!(parse_head_reference("ref:   \n"), None);
+        assert_eq!(parse_head_reference(""), None);
+    }
 
     #[test]
     fn a_hash_is_shortened_and_anything_else_is_not() {
