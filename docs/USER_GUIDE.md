@@ -4,7 +4,7 @@ Welcome to the **oops-libs** developer guide.
 
 This guide provides practical instructions for **Rust developers and contributors** building host-side command-line or GUI utilities within the OOPS ecosystem.
 
-If you are an AI coding agent or systems architect seeking the crate catalog, API surface, and role in THE LOOP, see the **[Technical Reference](../README.md)**.
+For the crate reference, the API surface and where oops-libs sits in the loop, see the **[Technical Reference](../README.md)**.
 
 ---
 
