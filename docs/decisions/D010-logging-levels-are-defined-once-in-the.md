@@ -7,7 +7,7 @@
 deciding that separately is how `warn` comes to mean "I did something" in one of them and "you
 should worry" in another.
 
-The table lives in [OOPS conventions §9](https://github.com/project-oops/OOPS/blob/main/docs/CONVENTIONS.md#9-logging).
+The table lives in [OOPS conventions §6](https://github.com/project-oops/OOPS/blob/main/docs/CONVENTIONS.md#6-logging).
 The two rules that do the work:
 
 **A library logs facts; a binary logs outcomes.** A function returning `Err` has decided
