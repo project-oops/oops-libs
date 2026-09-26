@@ -10,9 +10,7 @@ repository.workspace = true
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-# Everything past stderr is optional, because this crate is meant to be a dependency of every
-# tool including the small ones. A format library's CLI should not compile a rolling-file
-# appender - let alone an OTLP exporter and a tokio runtime - to get a `--verbose` flag.
+# Destinations past stderr are optional, so a small CLI compiles none of them.
 tracing-appender = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
@@ -20,12 +18,10 @@ opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 
 [features]
-# Stderr and a level. That is the whole of the default build.
 default = []
-# Also write to a rolling file on disk.
+# A rolling file on disk.
 file = ["dep:tracing-appender"]
-# Also export spans over OTLP - the wire format an LGTM stack ingests. Needs a tokio runtime
-# already running in the consumer; see the crate docs.
+# OTLP span export. The consumer supplies a running tokio runtime.
 otlp = [
     "dep:tracing-opentelemetry",
     "dep:opentelemetry",

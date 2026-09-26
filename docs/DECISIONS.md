@@ -1,28 +1,25 @@
 # Decisions
 
-Numbered, with reasoning, as they are made. The reasoning is the point - it is what stops a
-choice being re-litigated by somebody who only has the choice.
+The decisions in force, one file each under `decisions/`. Format and rules are in
+[STYLE](https://github.com/project-oops/OOPS/blob/main/docs/STYLE.md#decisions).
 
 **This table is generated.** Edit an entry under `decisions/`, then run
 `tools/split-decisions.sh --index oops-libs`. A number resolves to exactly one file.
 
 | | # | decision | status | date |
 |---|---|---|---|---|
-| 🟢 | D001 | [A fifth repository, for what every project needs and none of them owns](decisions/D001-a-fifth-repository-for-what-every.md) | decided | 2026-08-29 |
-| 🟢 | D002 | [The build stamp is one implementation, because two had become complementary](decisions/D002-the-build-stamp-is-one-implementation.md) | decided | 2026-08-29 |
-| 🟢 | D003 | [The reading half of the stamp is macros, not functions](decisions/D003-the-reading-half-of-the-stamp-is-macros.md) | decided | 2026-08-29 |
-| 🟢 | D004 | [Documentation is embedded, and the registry stays in the consumer](decisions/D004-documentation-is-embedded-and-the.md) | decided | 2026-08-29 |
-| 🟢 | D005 | [The markdown renderer is written here rather than taken](decisions/D005-the-markdown-renderer-is-written-here.md) | decided | 2026-08-29 |
-| 🟢 | D006 | [Logging is `tracing`, and everything past stderr is a feature](decisions/D006-logging-is-tracing-and-everything-past.md) | decided | 2026-08-29 |
-| 🟢 | D007 | [The home directory is the default layout, not the platform's](decisions/D007-the-home-directory-is-the-default.md) | decided | 2026-08-29 |
+| 🟢 | D001 | [A separate repository for what every project needs and none owns](decisions/D001-a-fifth-repository-for-what-every.md) | decided | 2026-08-29 |
+| 🟢 | D002 | [One shared build stamp](decisions/D002-the-build-stamp-is-one-implementation.md) | decided | 2026-08-29 |
+| 🟢 | D004 | [Documentation is embedded, and the page list stays in the consumer](decisions/D004-documentation-is-embedded-and-the.md) | decided | 2026-08-29 |
+| 🟢 | D005 | [The markdown renderer is written here](decisions/D005-the-markdown-renderer-is-written-here.md) | decided | 2026-08-29 |
+| 🟢 | D006 | [Logging is `tracing`, and every destination past stderr is a feature](decisions/D006-logging-is-tracing-and-everything-past.md) | decided | 2026-08-29 |
+| 🟢 | D007 | [The platform's own directory is the default layout](decisions/D007-the-platform-directory-is-the-default.md) | decided | 2026-09-26 |
 | 🟢 | D008 | [Domain code stays out](decisions/D008-domain-code-stays-out.md) | decided | 2026-08-29 |
-| 🟢 | D009 | [The nowhere-to-write case is a parameter, not a fact the caller inspects](decisions/D009-the-nowhere-to-write-case-is-a.md) | decided | 2026-08-29 |
+| 🟢 | D009 | [The nowhere-to-write case is a parameter](decisions/D009-the-nowhere-to-write-case-is-a.md) | decided | 2026-08-29 |
 | 🟢 | D010 | [Logging levels are defined once, in the shared conventions](decisions/D010-logging-levels-are-defined-once-in-the.md) | decided | 2026-08-29 |
-| 🟢 | D011 | [What five binaries were about to write twice, the library writes once](decisions/D011-what-five-binaries-were-about-to-write.md) | decided | 2026-08-30 |
-| 🟢 | D012 | [The documentation reader ships with pages, or it is not finished](decisions/D012-the-documentation-reader-ships-with.md) | decided | 2026-08-30 |
 | 🟢 | D013 | [One directory for the collection, not one per tool](decisions/D013-one-directory-for-the-collection-not.md) | decided | 2026-08-30 |
-| 🟢 | D014 | [Two roots, because a roaming profile is not a place for four gigabytes](decisions/D014-two-roots-because-a-roaming-profile-is.md) | decided | 2026-08-30 |
-| 🟢 | D015 | [The console registry belongs to Prosperous, and oops-paths gains nothing](decisions/D015-the-console-registry-belongs-to.md) | decided | 2026-09-09 |
+| 🟢 | D014 | [A data root and a cache root](decisions/D014-two-roots-because-a-roaming-profile-is.md) | decided | 2026-08-30 |
+| 🟢 | D015 | [A shared directory is not a shared file](decisions/D015-the-console-registry-belongs-to.md) | decided | 2026-09-09 |
 
 | | meaning |
 |---|---|

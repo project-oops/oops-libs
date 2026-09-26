@@ -1,54 +1,37 @@
-//! Turning logging on, the same way in every tool.
-//!
-//! Nothing here is novel and that is deliberate. It is [`tracing`] underneath - the facade the
-//! Rust ecosystem already agrees on - and this crate is the small amount of glue that stops four
-//! projects each inventing their own answer to "where do the lines go and how loud are they".
+//! Logging set up the same way in every tool: [`tracing`] with the configuration done once.
 //!
 //! ```no_run
 //! let _guard = oops_log::Logging::new("orbistoun").init();
 //! tracing::info!("started");
 //! ```
 //!
-//! Use [`tracing`]'s macros directly - `error!`, `warn!`, `info!`, `debug!`, `trace!`. This crate
-//! does not wrap them and should not: a wrapper would break `#[instrument]`, structured fields
-//! and every editor that knows what `tracing` is.
+//! Log with [`tracing`]'s own macros; this crate does not wrap them, so `#[instrument]` and
+//! structured fields keep working.
 //!
-//! # The guard is load-bearing
+//! # The guard
 //!
-//! [`Logging::init`] returns a [`Guard`] that must be **held for the life of the program**. The
-//! file writer batches on a background thread and the OTLP exporter batches over the network;
-//! dropping the guard early stops both, and the symptom is a log file that is empty or missing
-//! its last few seconds - the part somebody was reading it for. `let _ = ...` drops it
-//! immediately. `let _guard = ...` does not.
+//! [`Logging::init`] returns a [`Guard`] that must live as long as the program. The file and
+//! OTLP writers batch in the background and stop when it drops. `let _guard = ...` keeps it;
+//! `let _ = ...` drops it at once.
 //!
 //! # Levels
 //!
-//! Resolution order, first match wins:
+//! The first of these that is set wins:
 //!
-//! 1. `OOPS_LOG` - the same variable for every tool in the collection.
-//! 2. `RUST_LOG` - because everyone's fingers already know it.
-//! 3. Whatever [`Logging::level`] was given, defaulting to `info`.
+//! 1. `OOPS_LOG`
+//! 2. `RUST_LOG`
+//! 3. [`Logging::level`], default `info`
 //!
-//! Both variables take the full [`EnvFilter`] syntax, so a directive can be per-module:
-//! `OOPS_LOG=warn,orbistoun_loader=debug`.
-//!
-//! **The default holds the render crates down.** When neither variable is set, the requested
-//! level applies to everything except `wgpu`, `wgpu_core`, `wgpu_hal` and `naga`, which are
-//! capped at `warn` - a wgpu-backed window logs `Device::maintain` at INFO every frame, and that
-//! flood is not what a tool at `info` is trying to show. It is a cap, not an override: it only
-//! quietens crates the requested level would otherwise make chatty (`info` and below), and an
-//! explicit `OOPS_LOG`/`RUST_LOG` is taken whole, so `OOPS_LOG=trace` still gets wgpu at trace.
+//! The variables take the full [`EnvFilter`] syntax: `OOPS_LOG=warn,orbistoun_loader=debug`.
+//! When neither is set and the level is `info` or more verbose, `wgpu`, `wgpu_core`,
+//! `wgpu_hal` and `naga` are capped at `warn`; they log every frame at `info`.
 //!
 //! [`EnvFilter`]: tracing_subscriber::EnvFilter
 //!
-//! # Where the lines go
+//! # Destinations
 //!
-//! Stderr always, because a tool that logs to stdout corrupts whatever is being piped out of it.
-//! A rolling file with the `file` feature. OTLP with the `otlp` feature - that is the wire
-//! format an LGTM stack ingests, so "send it to Grafana" needs no code here beyond an endpoint.
-//!
-//! Each destination is a cargo feature rather than a runtime dependency, so a tool that wants a
-//! level and nothing else compiles neither.
+//! Stderr always, never stdout, which tools pipe. A rolling file with the `file` feature. OTLP
+//! with the `otlp` feature. The default build compiles neither extra destination.
 
 use tracing_subscriber::EnvFilter;
 #[cfg(feature = "otlp")]
@@ -58,12 +41,11 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 pub use tracing::Level;
 
-/// The variable this collection reads, in preference to `RUST_LOG`.
+/// The collection's level variable, read before `RUST_LOG`.
 pub const LEVEL_ENV: &str = "OOPS_LOG";
 
-/// How a tool wants its logging set up.
-///
-/// Built with [`Logging::new`] and turned on with [`Logging::init`].
+/// How a tool wants its logging set up. Built with [`Logging::new`], turned on with
+/// [`Logging::init`].
 #[derive(Debug, Clone)]
 pub struct Logging {
     service: String,
@@ -78,11 +60,8 @@ pub struct Logging {
 }
 
 impl Logging {
-    /// Start configuring, naming the service.
-    ///
-    /// The name is what a log aggregator groups by, so it should be the tool a person would say
-    /// they were running - `orbistoun`, `pros`, `obscene-tool` - not the crate that happens to
-    /// call this.
+    /// Starts configuring. `service` is the tool's name as a person would say it (`pros`,
+    /// `obscene-tool`), and is what an aggregator groups by.
     #[must_use]
     pub fn new(service: impl Into<String>) -> Self {
         Self {
@@ -98,47 +77,35 @@ impl Logging {
         }
     }
 
-    /// Which build this is, for the startup line.
-    ///
-    /// Pass `oops_build::line!()`. Kept as a plain string rather than a dependency on
-    /// `oops-build`, so this crate stays usable by anything and the two are not welded together.
+    /// The build, for the startup line. Pass `oops_build::line!()`.
     #[must_use]
     pub fn build(mut self, build: impl Into<String>) -> Self {
         self.build = Some(build.into());
         self
     }
 
-    /// Where the tool is keeping its data, for the startup line.
-    ///
-    /// Pass `oops_paths::Paths::data_root`. Same reasoning as [`Logging::build`].
+    /// Where the tool keeps its data, for the startup line. Pass `oops_paths::Paths::data_root`.
     #[must_use]
     pub fn root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
         self.root = Some(root.into());
         self
     }
 
-    /// The level to use when neither environment variable is set.
+    /// The level used when neither environment variable is set.
     #[must_use]
     pub const fn level(mut self, level: Level) -> Self {
         self.level = level;
         self
     }
 
-    /// Turn colour off.
-    ///
-    /// Worth doing when the output is known to be captured - a CI log full of escape sequences
-    /// is harder to read than a plain one, not easier.
+    /// Turns colour off, for output that is captured.
     #[must_use]
     pub const fn without_colour(mut self) -> Self {
         self.ansi = false;
         self
     }
 
-    /// Also write to a rolling daily file in `directory`.
-    ///
-    /// Takes a directory rather than a file so the rotation has somewhere to put yesterday's.
-    /// Pair it with `oops-paths` (`logs_dir()`) rather than choosing a location here - where a
-    /// tool keeps its data is that tool's decision and it is already made once.
+    /// Also writes a daily rolling file in `directory`, typically `Paths::logs_dir()`.
     #[cfg(feature = "file")]
     #[must_use]
     pub fn to_file(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
@@ -146,9 +113,8 @@ impl Logging {
         self
     }
 
-    /// Also export over OTLP to `endpoint`, e.g. `http://localhost:4317`.
-    ///
-    /// The consumer must already be inside a tokio runtime; the exporter batches on it.
+    /// Also exports over OTLP to `endpoint`, e.g. `http://localhost:4317`. The caller must
+    /// already be inside a tokio runtime.
     #[cfg(feature = "otlp")]
     #[must_use]
     pub fn to_otlp(mut self, endpoint: impl Into<String>) -> Self {
@@ -156,27 +122,9 @@ impl Logging {
         self
     }
 
-    /// The filter used when neither environment variable names one.
-    ///
-    /// The requested level for everything, with the render crates a wgpu-backed window pulls in -
-    /// `wgpu`, its core and HAL, and the `naga` shader translator - held down to `warn`.
-    ///
-    /// # Why these, and why here
-    ///
-    /// `wgpu_core` logs `Device::maintain: waiting for submission index …` at **INFO**, several
-    /// times a second, once per frame a window is drawing. At the collection's default of `info`
-    /// that buries a tool's own output under per-frame GPU bookkeeping nobody asked to read. It
-    /// is dampened in this shared crate rather than in each window because every wgpu-backed tool
-    /// here (the orbistoun and prosperous windows) inherits the same flood from the same cause,
-    /// and one of them silencing it privately is the drift this collection exists to prevent.
-    ///
-    /// # Only dampened, never amplified
-    ///
-    /// The directives are added **only when the requested level is more verbose than `warn`** -
-    /// `info`, `debug`, `trace`. A tool run at `warn` or `error` is left exactly as asked, because
-    /// pinning these crates to `warn` there would *raise* them above the global and turn a request
-    /// for quiet into more noise. And this is the default only: an explicit `OOPS_LOG` or
-    /// `RUST_LOG` is taken whole and untouched, so `OOPS_LOG=trace` still gets wgpu at trace.
+    /// The filter when no variable is set: `level` everywhere, with the render crates capped
+    /// at `warn` when `level` is more verbose than `warn`. At `warn` or quieter the cap would
+    /// raise them, so it is not added.
     fn default_filter(level: Level) -> EnvFilter {
         let base = EnvFilter::new(level.to_string());
         if level <= Level::WARN {
@@ -193,26 +141,17 @@ impl Logging {
             })
     }
 
-    /// Turn it on.
+    /// Turns logging on and returns the [`Guard`] to hold for the life of the program.
     ///
-    /// # Returns
-    ///
-    /// A [`Guard`] that must be held for the life of the program - see the crate note. Dropping
-    /// it early truncates the file and the OTLP batch.
-    ///
-    /// # Calling this twice
-    ///
-    /// The second call does nothing and says so at `debug`, rather than panicking. A test
-    /// harness that initialises per-test, or a library helpfully setting up logging for a
-    /// binary that already did, is a mistake worth neither a crash nor silence.
+    /// A second call does nothing and logs that at `debug`. A destination that cannot be set
+    /// up (an unwritable directory, an unreachable collector) is reported on stderr and
+    /// skipped; the tool still starts.
     #[must_use = "dropping the guard stops the file and OTLP writers"]
     pub fn init(self) -> Guard {
         let filter = EnvFilter::try_from_env(LEVEL_ENV)
             .or_else(|_| EnvFilter::try_from_default_env())
             .unwrap_or_else(|_| Self::default_filter(self.level));
 
-        // Stderr, never stdout: a tool that logs to stdout corrupts whatever is being piped
-        // out of it, and every one of these tools has an output somebody redirects.
         let stderr = tracing_subscriber::fmt::layer()
             .with_ansi(self.ansi)
             .with_writer(std::io::stderr);
@@ -221,9 +160,6 @@ impl Logging {
         let mut worker = None;
         #[cfg(feature = "file")]
         let file = self.directory.as_ref().and_then(|dir| {
-            // A logging setup that fails the program is worse than one that logs less. An
-            // unwritable directory is reported to stderr - which is already working - and the
-            // run continues.
             if let Err(error) = std::fs::create_dir_all(dir) {
                 eprintln!("logging: no file in {}: {error}", dir.display());
                 return None;
@@ -231,7 +167,6 @@ impl Logging {
             let appender = tracing_appender::rolling::daily(dir, format!("{}.log", self.service));
             let (writer, keep) = tracing_appender::non_blocking(appender);
             worker = Some(keep);
-            // Never coloured: escape sequences in a file are noise to every reader of it.
             Some(
                 tracing_subscriber::fmt::layer()
                     .with_ansi(false)
@@ -244,20 +179,19 @@ impl Logging {
         #[cfg(feature = "otlp")]
         let mut exporting = false;
         #[cfg(feature = "otlp")]
-        let otlp = self.endpoint.as_ref().and_then(|endpoint| {
-            match otlp_layer(&self.service, endpoint) {
-                Ok(layer) => {
-                    exporting = true;
-                    Some(layer)
-                }
-                Err(error) => {
-                    // Same rule as the file: a collector that is not there is a fact about the
-                    // environment, not a reason for the tool to fail to start.
-                    eprintln!("logging: no OTLP export to {endpoint}: {error}");
-                    None
-                }
-            }
-        });
+        let otlp =
+            self.endpoint
+                .as_ref()
+                .and_then(|endpoint| match otlp_layer(&self.service, endpoint) {
+                    Ok(layer) => {
+                        exporting = true;
+                        Some(layer)
+                    }
+                    Err(error) => {
+                        eprintln!("logging: no OTLP export to {endpoint}: {error}");
+                        None
+                    }
+                });
 
         let registry = tracing_subscriber::registry()
             .with(filter)
@@ -267,21 +201,14 @@ impl Logging {
         let registry = registry.with(otlp);
 
         if registry.try_init().is_err() {
-            // Naming the loser matters: when two components both set logging up, "already
-            // initialised" without a name leaves you guessing which one won.
             tracing::debug!(
                 service = %self.service,
                 "logging was already initialised; this call did nothing"
             );
             return Guard::inert(self.service);
         }
-        // **Which build, and where it writes.** The two facts every bug report needs and nobody
-        // remembers to ask for. Emitted here rather than by each tool because seven binaries
-        // hand-writing the same four lines is seven chances to word it differently, log it at
-        // the wrong level, or forget it - and it has to come after the subscriber exists, which
-        // is a detail every one of them would have to get right separately.
-        //
-        // `debug`, so an ordinary run stays silent.
+        // The build and the data root, which every bug report needs. At `debug`, so an
+        // ordinary run is silent, and after the subscriber exists so it is recorded.
         tracing::debug!(
             service = %self.service,
             build = self.build.as_deref().unwrap_or("unstamped"),
@@ -298,7 +225,7 @@ impl Logging {
     }
 }
 
-/// Builds the OTLP layer, or explains why it could not.
+/// The OTLP layer for `service`, exporting to `endpoint`.
 #[cfg(feature = "otlp")]
 fn otlp_layer<S>(
     service: &str,
@@ -325,17 +252,11 @@ where
     Ok(tracing_opentelemetry::layer().with_tracer(tracer))
 }
 
-/// Keeps the background writers alive.
-///
-/// Hold this for the life of the program. See the crate note on why `let _ =` is the wrong way
-/// to receive it.
+/// Keeps the background writers alive; hold it for the life of the program.
 #[must_use = "dropping this stops the file and OTLP writers"]
 pub struct Guard {
     service: String,
-    /// Never read, and that is the point: this exists to be *dropped*, at which moment the
-    /// appender flushes what it has buffered. Reading it would do nothing. The compiler cannot
-    /// tell that apart from a field somebody forgot about, so the exemption is stated here
-    /// rather than switched off for the crate.
+    /// Held only to be dropped, which flushes the file appender.
     #[cfg(feature = "file")]
     #[allow(dead_code)]
     file: Option<tracing_appender::non_blocking::WorkerGuard>,
@@ -344,7 +265,7 @@ pub struct Guard {
 }
 
 impl Guard {
-    /// A guard that owns nothing, for the call that found logging already set up.
+    /// A guard that owns nothing, returned when logging was already set up.
     fn inert(service: String) -> Self {
         Self {
             service,
@@ -372,8 +293,7 @@ impl std::fmt::Debug for Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        // The exporter batches, so whatever is queued when the program ends is lost unless it
-        // is told to finish. The file appender's own guard handles itself.
+        // Flushes the OTLP batch; the file appender's guard flushes itself.
         #[cfg(feature = "otlp")]
         if self.otlp {
             opentelemetry::global::shutdown_tracer_provider();
@@ -381,10 +301,7 @@ impl Drop for Guard {
     }
 }
 
-/// The common case: stderr, at whatever level the environment asks for.
-///
-/// Held separately from the builder because most tools want exactly this and should not have to
-/// read a builder's documentation to get it.
+/// Stderr at the level the environment asks for: `Logging::new(service).init()`.
 #[must_use = "dropping the guard stops the file and OTLP writers"]
 pub fn init(service: impl Into<String>) -> Guard {
     Logging::new(service).init()
@@ -394,14 +311,14 @@ pub fn init(service: impl Into<String>) -> Guard {
 mod tests {
     use super::*;
 
+    /// A second initialisation in one process is ignored, not a panic.
     #[test]
     fn a_second_initialisation_is_ignored_rather_than_fatal() {
-        // Both calls in one test on purpose: tests share a process, and a panic-on-second-init
-        // would make this crate unusable from any test that logs.
         let _first = Logging::new("test").init();
         let _second = Logging::new("test").init();
     }
 
+    /// The builder stores what it is given.
     #[test]
     fn the_builder_keeps_what_it_is_given() {
         let built = Logging::new("orbistoun")
@@ -412,20 +329,15 @@ mod tests {
         assert!(!built.ansi);
     }
 
+    /// The variable name is referenced by CI and scripts across the collection.
     #[test]
     fn the_level_variable_is_the_one_the_collection_agrees_on() {
-        // Pinned because it is written into CI, run scripts and documentation across four
-        // repositories; renaming it silently turns every one of those into a no-op.
         assert_eq!(LEVEL_ENV, "OOPS_LOG");
     }
 
-    /// **A verbose default caps the render crates; a quiet one is left alone.** The filter's
-    /// `Display` reproduces its directives, so a substring check is enough to say whether the cap
-    /// was applied - and applying it at `warn`/`error` would be raising these crates, not
-    /// dampening them, which is the mistake this guards against.
+    /// The render crates are capped at verbose levels and left alone at quiet ones.
     #[test]
     fn the_default_holds_wgpu_down_only_when_that_is_quieter() {
-        // wgpu logs `Device::maintain` at INFO every frame, so at info and below it is capped.
         for verbose in [Level::INFO, Level::DEBUG, Level::TRACE] {
             let shown = Logging::default_filter(verbose).to_string();
             assert!(
@@ -433,8 +345,6 @@ mod tests {
                 "at {verbose} the render crates should be capped: {shown}"
             );
         }
-        // At warn or error, adding `wgpu_core=warn` would make it noisier, not quieter, so the
-        // requested level is left to stand on its own.
         for quiet in [Level::WARN, Level::ERROR] {
             let shown = Logging::default_filter(quiet).to_string();
             assert!(

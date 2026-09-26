@@ -1,7 +1,6 @@
-//! Documentation that ships inside the binary.
+//! Documentation embedded in the binary, and an egui window to read it in.
 //!
-//! Because the pages ride in the executable, they are always accurate to the build a person is
-//! running - there is no version to keep in step and nothing to fetch.
+//! The pages are compiled in, so they always match the running build.
 //!
 //! ```ignore
 //! use oops_docs::{Doc, DocsWindow};
@@ -19,19 +18,8 @@
 //! docs.show(ctx, DOCS);
 //! ```
 //!
-//! # Why the registry lives in the consumer and not here
-//!
-//! `include_str!` resolves relative to the file it is written in, so this crate cannot embed
-//! another crate's documents - the paths would be relative to this one. That is a hard
-//! constraint rather than a preference, and it sets the boundary cleanly: the viewer is shared,
-//! the list of pages is not.
-//!
-//! # Ship the manual, not the notebook
-//!
-//! Point [`Doc::new`] at pages written for somebody using the tool. A decision log or a worklog
-//! is a development record - useful, in the repository, and not what somebody clicking
-//! *documentation* is asking for. They are also large: one of these projects has a decision log
-//! approaching a megabyte, and embedding it costs that in every binary.
+//! The page list lives in the consumer because `include_str!` resolves relative to the file it
+//! is written in (D004). Register user-facing pages, not decision logs or worklogs.
 
 mod markdown;
 
@@ -39,21 +27,21 @@ pub use markdown::{Block, Span, parse};
 
 use std::collections::HashMap;
 
-/// One page, embedded.
+/// One embedded page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Doc {
-    /// Stable identifier, used for addressing and for links between pages.
+    /// Stable identifier, used to address the page and to resolve links to it.
     pub slug: &'static str,
-    /// What the reader sees in the list.
+    /// The name shown in the list.
     pub name: &'static str,
-    /// One line under the name.
+    /// One line shown under the name.
     pub blurb: &'static str,
-    /// The markdown itself, from `include_str!`.
+    /// The markdown, from `include_str!`.
     pub body: &'static str,
 }
 
 impl Doc {
-    /// Declares a page. `const` so a registry can be a `const` too.
+    /// Declares a page. `const`, so a registry can be a `const`.
     #[must_use]
     pub const fn new(
         slug: &'static str,
@@ -70,16 +58,10 @@ impl Doc {
     }
 }
 
-/// Everything wrong with a registry, empty when there is nothing.
+/// Every problem with a registry: repeated or empty slugs, missing names or blurbs, empty
+/// pages, and pages without a top-level heading. Empty when sound.
 ///
-/// # Why this exists at all
-///
-/// `include_str!` proves at compile time that a file *exists*. It cannot notice that one was
-/// truncated to nothing, that two entries claim the same slug, or that a page has no title -
-/// and all three ship silently, because a documentation window showing an empty page looks like
-/// a page that has not been written yet.
-///
-/// Consumers should pin it:
+/// `include_str!` only proves a file exists. Consumers pin the rest with a test:
 ///
 /// ```ignore
 /// #[test]
@@ -119,16 +101,12 @@ pub fn check(docs: &[Doc]) -> Vec<String> {
     problems
 }
 
-/// The reader.
-///
-/// Holds which page is open and the parsed form of the pages already looked at. Keep one per
-/// application and call [`DocsWindow::show`] every frame.
+/// The reader window. Keep one per application and call [`DocsWindow::show`] every frame.
 #[derive(Default)]
 pub struct DocsWindow {
     open: bool,
     selected: Option<&'static str>,
-    // Parsing on every frame would re-parse a megabyte of markdown sixty times a second. Keyed
-    // by slug, and never invalidated because the source is baked into the binary.
+    /// Parsed pages by slug. Never invalidated: the source is compiled in.
     parsed: HashMap<&'static str, Vec<Block>>,
 }
 
@@ -142,21 +120,18 @@ impl std::fmt::Debug for DocsWindow {
 }
 
 impl DocsWindow {
-    /// Opens it, on the contents page.
+    /// Opens it on the contents page.
     pub fn open(&mut self) {
         self.open = true;
     }
 
-    /// How wide the list of pages is.
+    /// Width of the page list.
     const NAV_WIDTH: f32 = 190.0;
 
-    /// How much of the window it is drawn on this one takes, before anybody resizes it.
+    /// Share of the host window it opens at.
     const SHARE: f32 = 0.9;
 
-    /// The smallest this window is allowed to be.
-    ///
-    /// Below roughly this, the fixed-width list of pages on the left leaves no usable column
-    /// for the page itself, and a reader is resizing a window to see one word per line.
+    /// Smallest size that leaves a usable column for the page beside the list.
     const MINIMUM: egui::Vec2 = egui::Vec2::new(420.0, 260.0);
 
     /// Opens it at one page.
@@ -171,31 +146,16 @@ impl DocsWindow {
         self.open
     }
 
-    /// Draws it, if it is open. Call once per frame.
+    /// Draws it, if open. Call once per frame.
     ///
-    /// # Why the size is a constraint and not a preference
-    ///
-    /// `default_size` sets where a window starts and bounds nothing. A window with panels
-    /// inside it and no bound sizes itself from its content - and every paragraph here is laid
-    /// out with `horizontal_wrapped`, which wraps at `ui.available_width()`.
-    ///
-    /// Those two together have no fixed point. The text asks how wide it may be, the window
-    /// answers *as wide as your content*, so nothing ever wraps: one enormous line per
-    /// paragraph, justified across a width far past the frame, painted straight over whatever
-    /// the window is sitting on. The frame stays the size it was drawn at, which is why it
-    /// looks like a container that has stopped containing.
-    ///
-    /// So the width is decided before the content is asked, and both directions are bounded to
-    /// the screen. A page too wide or too long to fit now scrolls, which is what somebody
-    /// reaches for a scrollbar expecting.
+    /// The size is bounded to the host window and passed into the contents. A window that
+    /// sized itself from wrapped text would never wrap it, because the text wraps at the
+    /// width the window grants.
     pub fn show(&mut self, ctx: &egui::Context, docs: &[Doc]) {
         if !self.open {
             return;
         }
         let mut open = self.open;
-        // **Nine tenths of the window it is drawn on.** A size in pixels is a guess about
-        // somebody else's screen; a proportion of the thing it sits inside is not, and it is
-        // what a reader means by *a bit smaller than the window*.
         let screen = ctx.screen_rect();
         let most = egui::vec2(
             (screen.width() * Self::SHARE).max(Self::MINIMUM.x),
@@ -205,53 +165,27 @@ impl DocsWindow {
             .open(&mut open)
             .default_size(most)
             .min_size(Self::MINIMUM)
-            // Up to the whole window if somebody drags it there, and no further.
             .max_size(screen.size())
             .default_pos(screen.center())
             .pivot(egui::Align2::CENTER_CENTER)
             .collapsible(false)
             .resizable(true)
-            // Kept on screen, so a window dragged half off does not become one whose scrollbar
-            // cannot be reached.
+            // Keeps the scrollbar reachable after a drag.
             .constrain(true)
-            // **The size goes in.** Everything inside lays out to this rather than asking how
-            // much room there is - which, in a window that sizes itself from its content, is a
-            // question whose answer depends on the answer.
             .show(ctx, |ui| self.contents(ui, docs, most));
         self.open = open;
     }
 
-    /// The window's inside: a list on the left, the page on the right.
-    ///
-    /// # Why this does not use panels
-    ///
-    /// It did: a `SidePanel` and a `CentralPanel`, shown inside the window. A panel takes the
-    /// space it is given and asks for however much it wants; a window that is sizing itself
-    /// gives however much its content asks for. Neither commits to a number, and the paragraphs
-    /// below wrap at `ui.available_width()` - so nothing ever wrapped, and the text was laid
-    /// out across a width the frame had no idea about and painted straight over the window it
-    /// was supposed to be inside.
-    ///
-    /// Constraining the window did not fix it, because the panels were never reading the
-    /// constraint. Replacing them with explicit allocations did not fix it either, because the
-    /// number they were allocated from was `ui.available_size()` - and inside a window that is
-    /// sizing itself, that is not a measurement, it is the same open question wearing a
-    /// different hat. It came back enormous, the columns were allocated enormous, and the window
-    /// grew to fit them: wider than the application it was floating over.
-    ///
-    /// So the ceiling arrives from outside, worked out from the window this is drawn on before
-    /// anything here is asked anything. `most` is that ceiling; the room actually used is
-    /// whichever of it and the current size is smaller, so dragging the window narrower still
-    /// narrows the text.
+    /// The list on the left and the page on the right, laid out in explicit sizes no larger
+    /// than `most`. Panels are not used: inside a self-sizing window they take whatever width
+    /// the content asks for, and the text never wraps.
     fn contents(&mut self, ui: &mut egui::Ui, docs: &[Doc], most: egui::Vec2) {
         let room = egui::vec2(
             ui.available_width().min(most.x),
             ui.available_height().min(most.y),
         );
         ui.set_max_size(room);
-        // The list of pages is a fixed column; the page gets the rest, less the separator. Both
-        // are floored, so a window dragged very small produces a narrow page rather than a
-        // negative width and a panic.
+        // Floored, so a very small window gives a narrow page rather than a negative width.
         let nav = Self::NAV_WIDTH.min(room.x * 0.4);
         let page = (room.x - nav - 12.0).max(80.0);
 
@@ -282,13 +216,10 @@ impl DocsWindow {
                 egui::vec2(page, room.y),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    // **The number every wrap below reads.** Set before a single word is laid
-                    // out, so `available_width` answers with this rather than with a question.
+                    // Fixed before any text is laid out; every wrap below reads this width.
                     ui.set_min_size(egui::vec2(page, room.y));
                     ui.set_max_size(egui::vec2(page, room.y));
-                    // **Both directions.** Wrapping handles prose, but a code block is one long
-                    // line by nature and a table has the width it has. Vertical-only scrolling
-                    // left those with nowhere to go but outwards.
+                    // Both directions: code blocks and tables do not wrap.
                     egui::ScrollArea::both()
                         .id_salt("docs-page")
                         .auto_shrink([false, false])
@@ -301,7 +232,7 @@ impl DocsWindow {
         });
     }
 
-    /// The contents page, shown until something is picked.
+    /// The contents page, shown until a page is picked.
     fn index(ui: &mut egui::Ui, docs: &[Doc], selected: &mut Option<&'static str>) {
         ui.heading("Documentation");
         ui.add_space(8.0);
@@ -313,8 +244,6 @@ impl DocsWindow {
             ui.add_space(6.0);
         }
         if docs.is_empty() {
-            // Says which of the two it is. "No documentation" alone leaves a reader unsure
-            // whether the window is broken or the pages were never written.
             ui.label(egui::RichText::new("This build ships no documentation pages.").weak());
         }
     }
@@ -333,10 +262,7 @@ impl DocsWindow {
         }
         ui.add_space(4.0);
 
-        let blocks = self
-            .parsed
-            .entry(slug)
-            .or_insert_with(|| markdown::parse(doc.body));
+        let blocks = self.parsed.entry(slug).or_insert_with(|| parse(doc.body));
         let mut follow = None;
         for block in blocks.iter() {
             draw(ui, block, docs, &mut follow);
@@ -352,7 +278,6 @@ fn draw(ui: &mut egui::Ui, block: &Block, docs: &[Doc], follow: &mut Option<&'st
     match block {
         Block::Heading { level, spans } => {
             ui.add_space(if *level <= 2 { 10.0 } else { 6.0 });
-            // Sizes rather than egui's `heading`, so the six levels stay distinguishable.
             let size = match level {
                 1 => 22.0,
                 2 => 18.0,
@@ -388,8 +313,7 @@ fn draw(ui: &mut egui::Ui, block: &Block, docs: &[Doc], follow: &mut Option<&'st
                 if let Some(language) = language {
                     ui.label(egui::RichText::new(language).weak().small());
                 }
-                // Selectable: a reader who wants a command wants to copy it, and a label they
-                // cannot select is a command they have to retype.
+                // A read-only text edit, so the code can be selected and copied.
                 ui.add(
                     egui::TextEdit::multiline(&mut text.as_str())
                         .font(egui::TextStyle::Monospace)
@@ -413,9 +337,7 @@ fn draw(ui: &mut egui::Ui, block: &Block, docs: &[Doc], follow: &mut Option<&'st
         Block::TableRow { cells, header } => {
             ui.horizontal_wrapped(|ui| {
                 for cell in cells {
-                    // A fixed column width rather than a measured one: measuring means two
-                    // passes over every row, and these tables are reference material where an
-                    // even column reads better than a tight one.
+                    // Fixed column width: one pass per row, and even columns.
                     ui.allocate_ui_with_layout(
                         egui::vec2(160.0, 0.0),
                         egui::Layout::left_to_right(egui::Align::TOP),
@@ -440,7 +362,7 @@ fn draw(ui: &mut egui::Ui, block: &Block, docs: &[Doc], follow: &mut Option<&'st
     }
 }
 
-/// Runs the body of a block at a nesting depth.
+/// Runs `body` indented by `indent` list levels.
 fn indented(ui: &mut egui::Ui, indent: u8, body: impl FnOnce(&mut egui::Ui)) {
     if indent == 0 {
         body(ui);
@@ -457,22 +379,20 @@ fn inline(ui: &mut egui::Ui, spans: &[Span], docs: &[Doc], follow: &mut Option<&
     ui.horizontal_wrapped(|ui| render_spans(ui, spans, docs, follow));
 }
 
-/// The spans themselves, without opening a layout of their own.
+/// The spans, in the current layout.
+///
+/// Plain text is one label per word, because `horizontal_wrapped` wraps between items. A link
+/// to a shipped page opens it here; an `http` link opens the browser.
 fn render_spans(
     ui: &mut egui::Ui,
     spans: &[Span],
     docs: &[Doc],
     follow: &mut Option<&'static str>,
 ) {
-    // egui lays out horizontal_wrapped by item, so one label per word keeps the wrap points
-    // where a reader expects them. A single label per span wraps only between spans, which puts
-    // a whole sentence on the next line.
     for span in spans {
         match span.link.as_deref() {
             Some(dest) => {
                 if ui.link(style(span)).clicked() {
-                    // A link to another shipped page opens it here rather than in a browser -
-                    // the whole point of embedding them is that they work with no network.
                     if let Some(doc) = resolve(dest, docs) {
                         *follow = Some(doc);
                     } else if dest.starts_with("http") {
@@ -494,16 +414,8 @@ fn render_spans(
     }
 }
 
-/// The page a link points at, when it points at one of these.
-///
-/// Matches on the file stem, so `../features/running.md`, `running.md` and `running` all reach
-/// the same page - which is what a document written for a repository browser will contain.
-///
-/// `dest` rather than `target`, which is what `pulldown-cmark` calls it and is the only sense of
-/// that word this repository has left. The collection now spends `target` three ways and names a
-/// qualifier for each: a **registered target** is a machine Prosperous knows, a **build target**
-/// is what an artifact is built for, an **install target** is where a manifest puts one - and
-/// cargo keeps it for a build directory. A markdown link's destination should not be a fifth.
+/// The page a link destination names, matched on file stem, so `../features/running.md`,
+/// `running.md#part` and `running` all reach the same page.
 fn resolve(dest: &str, docs: &[Doc]) -> Option<&'static str> {
     if dest.starts_with("http") {
         return None;
@@ -543,20 +455,22 @@ mod tests {
         Doc::new("two", "Two", "The second", "# Two\n\nBody.\n"),
     ];
 
+    /// A sound registry reports nothing.
     #[test]
     fn a_sound_registry_has_nothing_to_report() {
         assert_eq!(check(GOOD), Vec::<String>::new());
     }
 
+    /// An empty page is reported.
     #[test]
     fn a_truncated_page_is_caught() {
-        // The failure `include_str!` cannot see: the file exists and is empty.
         const DOCS: &[Doc] = &[Doc::new("gone", "Gone", "blurb", "")];
         let problems = check(DOCS);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("empty"), "{problems:?}");
     }
 
+    /// A repeated slug is reported once.
     #[test]
     fn a_repeated_slug_is_caught() {
         const DOCS: &[Doc] = &[
@@ -566,6 +480,7 @@ mod tests {
         assert_eq!(check(DOCS).len(), 1);
     }
 
+    /// A page without a top-level heading is reported.
     #[test]
     fn a_page_without_a_title_is_caught() {
         const DOCS: &[Doc] = &[Doc::new("x", "X", "blurb", "Just prose, no heading.\n")];
@@ -573,20 +488,19 @@ mod tests {
         assert!(problems[0].contains("heading"), "{problems:?}");
     }
 
+    /// Every link form resolves to the page; unknown pages and external links do not.
     #[test]
     fn links_between_pages_resolve_however_they_are_written() {
-        // All three forms appear in documents written to be read in a repository browser.
         for form in ["two", "two.md", "../features/two.md", "two.md#a-section"] {
             assert_eq!(resolve(form, GOOD), Some("two"), "{form}");
         }
         assert_eq!(resolve("three.md", GOOD), None);
-        // An external link is the browser's problem, not a missing page.
         assert_eq!(resolve("https://example.com/two.md", GOOD), None);
     }
 
+    /// An empty registry is valid.
     #[test]
     fn an_empty_registry_is_not_an_error() {
-        // A tool may ship the viewer before it ships pages; that is a state, not a fault.
         assert_eq!(check(&[]), Vec::<String>::new());
     }
 }

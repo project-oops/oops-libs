@@ -7,14 +7,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Only the platform-native layout needs this; the home layout is `std` and nothing else. See the
-# crate docs for why the platform answer is not automatically the right one.
+# Only the platform-native layout needs it; the home layout is `std` alone.
 dirs = { workspace = true, optional = true }
 
 [features]
-# On by default: the default layout *is* the platform's own, and shipping it off would mean the
-# documented default silently was not the default. Switch it off only for a build that wants the
-# home-directory layout and nothing else.
+# On by default because the default layout is the platform's own.
 default = ["platform-dirs"]
 platform-dirs = ["dep:dirs"]
 

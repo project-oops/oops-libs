@@ -1,19 +1,7 @@
-//! Markdown to egui.
+//! Markdown to a flat list of drawable blocks.
 //!
-//! # Why a renderer here rather than a crate off the shelf
-//!
-//! `egui_commonmark` exists and does this. It is also pinned to an egui version, so taking it
-//! would mean every future egui bump in this collection waits on a matching release of it - for
-//! four projects, to render documents that use about eight markdown features between them.
-//! `pulldown-cmark` is the parser underneath most of the ecosystem and depends on nothing that
-//! moves; what is written here is the display half only.
-//!
-//! # Two passes, on purpose
-//!
-//! Parsing produces a flat [`Block`] list first, and egui draws that. Rendering straight from
-//! the event stream means holding layout state across events - am I in a list, how deep, is this
-//! cell a header - which is where that kind of code goes wrong. A flat list with an explicit
-//! `indent` handles nesting without recursion and can be tested without a UI at all.
+//! `pulldown-cmark` parses; this module turns its events into [`Block`]s, which the window
+//! draws (D005). Nesting is an explicit `indent`, so the list can be tested without a UI.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -81,10 +69,7 @@ pub enum Block {
         /// Its content.
         spans: Vec<Span>,
     },
-    /// One row of a table.
-    ///
-    /// Rows rather than a table object: these documents use tables as reference material read
-    /// top to bottom, and a flat row list draws correctly however ragged the source is.
+    /// One row of a table. Rows, not a table object, so a ragged table still draws.
     TableRow {
         /// The cells, left to right.
         cells: Vec<Vec<Span>>,
@@ -95,10 +80,7 @@ pub enum Block {
     Rule,
 }
 
-/// Parses markdown into blocks.
-///
-/// Tables and strikethrough are enabled because these documents use them; everything else is
-/// `CommonMark`.
+/// Parses `CommonMark`, with tables and strikethrough, into blocks.
 #[must_use]
 pub fn parse(source: &str) -> Vec<Block> {
     let mut options = Options::empty();
@@ -112,12 +94,7 @@ pub fn parse(source: &str) -> Vec<Block> {
     walker.blocks
 }
 
-/// The state a walk over the event stream has to carry.
-///
-/// A struct rather than a pile of locals in one long loop. That is this module's whole argument:
-/// what goes wrong in an event-driven renderer is layout state nobody can see, and eight mutable
-/// locals threaded through a hundred-line match is exactly that state with nowhere to write its
-/// name down.
+/// The layout state carried across the event stream.
 #[derive(Default)]
 struct Walker {
     blocks: Vec<Block>,
@@ -127,8 +104,7 @@ struct Walker {
     style: Span,
     /// How many list levels deep.
     indent: u8,
-    /// One counter per list level, `None` for a bulleted list. A stack, because a numbered list
-    /// can contain a bulleted one and then carry on counting.
+    /// One counter per open list level, `None` for a bulleted list.
     counters: Vec<Option<u64>>,
     /// The code block being collected, if inside one.
     code: Option<(String, Option<String>)>,
@@ -161,7 +137,7 @@ impl Walker {
         });
     }
 
-    fn event(&mut self, event: Event) {
+    fn event(&mut self, event: Event<'_>) {
         match event {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
@@ -183,22 +159,17 @@ impl Walker {
             Event::SoftBreak => self.spans.push(Span::plain(" ")),
             Event::HardBreak => self.spans.push(Span::plain("\n")),
             Event::Rule => self.blocks.push(Block::Rule),
-            // Html, footnotes, task markers and the rest: not used by these documents, and
-            // dropping them reads better than rendering their source.
+            // HTML, footnotes and task markers are dropped rather than shown as source.
             _ => {}
         }
     }
 
-    fn start(&mut self, tag: Tag) {
+    fn start(&mut self, tag: Tag<'_>) {
         match tag {
             Tag::Heading { level, .. } => self.heading = Some(heading_level(level)),
             Tag::List(first) => {
-                // A *tight* list holds its item text directly, with no paragraph around it, so
-                // there is no end-of-paragraph to flush the parent item before a nested list
-                // starts. Without this the parent's own text is swallowed into the first child
-                // and the parent item is never emitted at all - a numbered item with a nested
-                // bullet produced two items instead of three, and the outer numbering then ran
-                // short.
+                // A tight list has no paragraph end to flush the parent item, so flush it
+                // here, before the nested list takes the pending text.
                 if self.indent > 0 {
                     self.flush_item();
                 }
@@ -250,8 +221,7 @@ impl Walker {
             TagEnd::CodeBlock => {
                 if let Some((text, language)) = self.code.take() {
                     self.blocks.push(Block::Code {
-                        // The fence's own trailing newline is not part of the code, and leaving
-                        // it draws an empty final line inside the frame.
+                        // The fence's trailing newline is not part of the code.
                         text: text.trim_end_matches('\n').to_owned(),
                         language,
                     });
@@ -315,6 +285,7 @@ mod tests {
         spans.iter().map(|s| s.text.as_str()).collect()
     }
 
+    /// A heading and the paragraph after it are separate blocks.
     #[test]
     fn a_heading_and_a_paragraph_come_out_separately() {
         let blocks = parse("# Title\n\nSome prose.\n");
@@ -326,6 +297,7 @@ mod tests {
         assert_eq!(text_of(spans), "Title");
     }
 
+    /// Bold and code become span flags; their markers are removed.
     #[test]
     fn inline_styles_survive_as_flags_rather_than_markers() {
         let blocks = parse("a **bold** and `code` word\n");
@@ -334,10 +306,10 @@ mod tests {
         };
         assert!(spans.iter().any(|s| s.strong && s.text == "bold"));
         assert!(spans.iter().any(|s| s.code && s.text == "code"));
-        // The asterisks and backticks are gone, not escaped.
         assert!(!text_of(spans).contains('*'));
     }
 
+    /// Numbered items carry their resolved numbers.
     #[test]
     fn a_numbered_list_numbers_itself() {
         let blocks = parse("1. one\n2. two\n3. three\n");
@@ -351,6 +323,7 @@ mod tests {
         assert_eq!(markers, ["1.", "2.", "3."]);
     }
 
+    /// A nested bullet keeps its parent item, indents, and the outer count continues.
     #[test]
     fn a_nested_list_indents_and_the_outer_one_keeps_counting() {
         let blocks = parse("1. one\n   - inner\n2. two\n");
@@ -361,11 +334,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Document order: the parent item, then its child, then the next parent - and `two`
-        // is still 2 rather than restarting at 1.
         assert_eq!(items, [("1.", 0), ("\u{2022}", 1), ("2.", 0)]);
     }
 
+    /// A fenced block keeps its language and drops the fence and trailing newline.
     #[test]
     fn a_fenced_block_keeps_its_language_and_loses_its_fence() {
         let blocks = parse("```bash\ncargo test\n```\n");
@@ -380,6 +352,7 @@ mod tests {
         );
     }
 
+    /// A table becomes rows, with the header row marked.
     #[test]
     fn a_table_becomes_rows_with_the_header_marked() {
         let blocks = parse("| a | b |\n|---|---|\n| 1 | 2 |\n");
@@ -393,6 +366,7 @@ mod tests {
         assert_eq!(rows, [(true, 2), (false, 2)]);
     }
 
+    /// A link span carries its text and destination.
     #[test]
     fn a_link_carries_its_destination() {
         let blocks = parse("see [the docs](docs/README.md)\n");
@@ -404,6 +378,7 @@ mod tests {
         assert_eq!(link.link.as_deref(), Some("docs/README.md"));
     }
 
+    /// Empty or blank input yields no blocks.
     #[test]
     fn nothing_at_all_parses_to_nothing() {
         assert!(parse("").is_empty());

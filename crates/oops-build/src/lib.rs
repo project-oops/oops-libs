@@ -1,31 +1,7 @@
-//! Which build this is.
+//! Which build this is: version, commit and build time, stamped once and read the same way
+//! by every tool.
 //!
-//! # Why a running program should be able to say
-//!
-//! A screenshot, a bug report and a working copy are three claims about the same software, and
-//! without a stamp there is no way to tell whether they agree.
-//!
-//! # Why this is shared rather than written per project
-//!
-//! It was written twice before this crate existed, and the two copies drifted into being
-//! *complementary*: each solved half the problem and carried the half the other had already
-//! fixed. Neither was wrong on purpose, and nothing caught it, because a stamp that reads
-//! `no commit` looks like a local build rather than a defect.
-//!
-//! - One asked git directly, handled a modified tree, and shortened hashes - but emitted no
-//!   build time and no assembled line.
-//! - The other assembled a readable line with a UTC timestamp - but read its commit from an
-//!   environment variable **nothing ever set**, in CI or anywhere else, so every binary it ever
-//!   produced stamped `no commit`. Its timestamp was also a constant baked into one crate,
-//!   which records when *that crate* was last compiled rather than when the binary was made.
-//!
-//! Both halves are here, and the failure mode that hid the first defect is what
-//! [`Stamp::is_exact`] exists to make visible.
-//!
-//! # Using it
-//!
-//! This crate goes in **both** dependency tables, because half of it runs at build time and half
-//! at run time:
+//! The crate goes in both dependency tables, because half of it runs at build time:
 //!
 //! ```toml
 //! [dependencies]
@@ -45,44 +21,27 @@
 //! Then anywhere in the consumer:
 //!
 //! ```ignore
-//! let stamp = oops_build::stamp!();   // "v0.3.1 - a1b2c3d - built 2026-08-29 14:03 UTC"
+//! let stamp = oops_build::stamp!(); // "v0.3.1 - a1b2c3d"
 //! ```
 //!
-//! # Why the reading half is macros
-//!
-//! `env!("CARGO_PKG_VERSION")` inside *this* crate would report this crate's version, and
-//! `option_env!` here would read the environment of this crate's compilation rather than the
-//! consumer's. Both have to expand at the call site, so both are macros. That is not an
-//! aesthetic choice - a plain function here silently reports the wrong thing.
+//! The reading half is macros because `env!` and `option_env!` must expand in the consumer to
+//! see the consumer's version and commit; a function here would report this crate's.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The environment variable the build script sets and the macros read.
-///
-/// One name across every project, so a CI workflow that exports it works for all of them.
+/// The environment variable the build script sets and the macros read. CI may set it to
+/// supply the commit.
 pub const COMMIT_ENV: &str = "OOPS_COMMIT";
 
-// ---------------------------------------------------------------------------------------
-// Build-script half
-// ---------------------------------------------------------------------------------------
+// Build-script half.
 
-/// Stamps the commit into the calling crate. Call from a consumer's `build.rs`.
+/// Stamps the commit into the calling crate. Call from the consumer's `build.rs`.
 ///
-/// # Why this asks git rather than waiting to be told
-///
-/// A build script that only reads an environment variable is correct exactly when something
-/// sets it, and silently useless otherwise - which is how one of the two original copies came
-/// to stamp `no commit` on every binary it ever produced. Asking git needs no configuration and
-/// works in a checkout, in CI, and for anybody who clones. An explicitly supplied value still
-/// wins, so a build system that knows better can say so.
-///
-/// A modified tree gets `-dirty`, because a binary built from edits is not the commit it would
-/// otherwise name, and a stamp pointing at a commit somebody can check out has to be true or it
-/// is worse than saying nothing.
+/// A non-empty [`COMMIT_ENV`] wins; otherwise git is asked, and a modified tree gets a
+/// `-dirty` suffix. Outside a repository nothing is stamped.
 pub fn emit() {
-    // Always watched: this is how CI supplies the commit, and a value that changed without
-    // re-stamping would put the previous run's SHA into this run's binary.
+    // Watched so a CI-supplied commit re-stamps when it changes.
     println!("cargo:rerun-if-env-changed={COMMIT_ENV}");
     watch_git();
 
@@ -95,13 +54,9 @@ pub fn emit() {
     }
 
     let Some(short) = git(&["rev-parse", "--short", "HEAD"]) else {
-        // No commit, no git, or a repository with no history yet. All ordinary, and all
-        // meaning the same thing to a reader: this build has no commit to name. The reading
-        // half falls back to when the binary was written.
         return;
     };
-    // `--quiet` exits non-zero when there is something to report, so a failure here means the
-    // tree is modified rather than that the command did not run.
+    // `--quiet` exits non-zero when the tree differs from HEAD.
     let dirty = Command::new("git")
         .args(["diff", "--quiet", "HEAD"])
         .status()
@@ -109,29 +64,13 @@ pub fn emit() {
     let suffix = if dirty { "-dirty" } else { "" };
     println!("cargo:rustc-env={COMMIT_ENV}={short}{suffix}");
 }
-/// Re-run when the commit moves, and not on every build.
+
+/// Re-runs the build script when the commit moves.
 ///
-/// Naming a path that does not exist makes cargo re-run the script on **every** build, so a
-/// source tarball with no `.git` would pay a rebuild for a stamp it can never have. The
-/// directory is found by walking up rather than hardcoded, because the depth from a crate to
-/// the repository root differs across these projects and a wrong relative path fails silently.
-///
-/// # Why `HEAD` alone is not enough, and what is watched instead
-///
-/// On a branch, `.git/HEAD` holds `ref: refs/heads/<branch>` and **does not change when a commit
-/// lands** - only the ref it names does. Watching `HEAD` alone therefore misses every commit on a
-/// branch, which is the ordinary case: the stamp goes stale and names whatever commit happened to be
-/// checked out the last time the script ran for some other reason. So this also watches the ref
-/// `HEAD` points at, and the reflog `logs/HEAD`, which records every move of `HEAD` - commit,
-/// checkout, reset - whether the ref is loose or packed. Between them a commit on the checked-out
-/// branch re-runs the script and refreshes the stamp.
-///
-/// `.git/index` was watched here too, and is not any more. Watching it caught the `-dirty` suffix
-/// sooner - git rewrites the index whenever it refreshes its stat cache, so a `git status` after an
-/// edit re-ran this - but it cost a rebuild for every `git add` and `git status`, most of them, for a
-/// suffix that was already only approximately live. Editing a tracked file still touches none of
-/// these until some git command intervenes, so `-dirty` can be one build behind; [`Stamp::is_exact`]
-/// is the question to ask regardless, being false for a local build with no commit at all.
+/// Watches `HEAD`, the ref it names (which is the file that changes on a branch commit) and
+/// the reflog `logs/HEAD` (which covers packed refs). Only existing paths are named, because
+/// cargo re-runs on every build for a missing one. The index is not watched, so `-dirty` can
+/// lag one build behind an edit.
 fn watch_git() {
     let Some(root) = repo_root() else { return };
     let head = root.join("HEAD");
@@ -139,42 +78,33 @@ fn watch_git() {
         return;
     }
     println!("cargo:rerun-if-changed={}", head.display());
-    // The ref `HEAD` names - the file that actually advances when a branch commit lands.
     if let Some(reference) = head_reference(&head) {
         let ref_path = root.join(&reference);
         if ref_path.exists() {
             println!("cargo:rerun-if-changed={}", ref_path.display());
         }
     }
-    // The reflog, a catch-all: it appends on every move of `HEAD`, and covers a packed ref that has
-    // no loose file of its own.
     let reflog = root.join("logs").join("HEAD");
     if reflog.exists() {
         println!("cargo:rerun-if-changed={}", reflog.display());
     }
 }
 
-/// The ref `HEAD` names, e.g. `refs/heads/main`, when it is a symbolic ref.
-///
-/// `None` for a detached `HEAD` - whose own file already changes on a commit - or an unreadable one.
+/// The ref `HEAD` names, e.g. `refs/heads/main`; `None` when detached or unreadable.
 fn head_reference(head: &Path) -> Option<String> {
     parse_head_reference(&std::fs::read_to_string(head).ok()?)
 }
 
-/// The ref a `HEAD` file's contents name, split out from the read so it can be tested without a file.
-///
-/// `HEAD` is either `ref: <path>\n` (on a branch) or a bare commit id (detached); only the first
-/// names a ref to follow, and only a non-empty one.
+/// The ref in a `HEAD` file's contents: `ref: <path>` on a branch, a bare id when detached.
 fn parse_head_reference(contents: &str) -> Option<String> {
     let reference = contents.strip_prefix("ref:")?.trim();
     (!reference.is_empty()).then(|| reference.to_owned())
 }
 
-/// The nearest `.git` at or above the crate being built, if there is one.
+/// The nearest `.git` directory at or above the crate being built.
 ///
-/// Handles the worktree and submodule case, where `.git` is a file pointing elsewhere: there is
-/// nothing useful to watch then, so it reports nothing rather than watching a file that never
-/// changes.
+/// `None` when `.git` is a file (a worktree or submodule): its contents never change on a
+/// commit, so there is nothing useful to watch.
 fn repo_root() -> Option<PathBuf> {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
     let mut dir: Option<&Path> = Some(Path::new(&manifest));
@@ -191,7 +121,7 @@ fn repo_root() -> Option<PathBuf> {
     None
 }
 
-/// One git command, or nothing at all when git is absent or unhappy.
+/// One git command's trimmed output, or `None` when git is absent or fails.
 fn git(args: &[&str]) -> Option<String> {
     let out = Command::new("git").args(args).output().ok()?;
     if !out.status.success() {
@@ -202,19 +132,8 @@ fn git(args: &[&str]) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-/// A commit as it should be displayed.
-///
-/// # Why the shortening happens here rather than in the workflow
-///
-/// GitHub Actions hands out the full forty-character SHA and its expression syntax cannot slice
-/// a string, so shortening in the workflow means a shell step whose only job is to cut seven
-/// characters off - in every workflow, in every project, kept in step by hand. Doing it here
-/// means a workflow passes the SHA unmodified and one place decides how long a displayed commit
-/// is.
-///
-/// **Only a hash is shortened.** Anything that is not plain hex - a tag, a `git describe`
-/// string, a branch name - passes through whole, because truncating those would produce
-/// something that looks like an identifier and identifies nothing.
+/// A supplied commit as displayed: a hex hash is cut to seven characters, anything else (a
+/// tag, a `git describe` string) is kept whole. Workflows pass the full SHA unmodified.
 fn shorten(supplied: &str) -> String {
     const DISPLAY_LENGTH: usize = 7;
     let looks_like_a_hash =
@@ -226,38 +145,29 @@ fn shorten(supplied: &str) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------------------
-// Reading half
-// ---------------------------------------------------------------------------------------
+// Reading half.
 
 /// What a build can say about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stamp {
     /// The consumer's package version.
     pub version: &'static str,
-    /// The commit, when the build knew one. `None` is the honest answer for a build made
-    /// outside a repository.
+    /// The commit, or `None` for a build made outside a repository.
     pub commit: Option<&'static str>,
     /// When the running executable was written, in seconds since the epoch.
     pub built_at: Option<u64>,
 }
 
 impl Stamp {
-    /// Whether this names a commit somebody else could check out.
-    ///
-    /// False for a local build, and **false for a modified tree** - a `-dirty` commit names a
-    /// tree that only exists on one machine. Report code should ask this rather than test
-    /// `commit.is_some()`, because the whole reason this crate exists is that a stamp which
-    /// merely *looks* populated is the failure that goes unnoticed.
+    /// Whether this names a commit somebody else could check out: false for a local build
+    /// and for a `-dirty` tree. Ask this rather than `commit.is_some()`.
     #[must_use]
     pub fn is_exact(&self) -> bool {
         self.commit.is_some_and(|c| !c.ends_with("-dirty"))
     }
 
-    /// The one-line form: version, commit if there is one, otherwise when it was built.
-    ///
-    /// Assembled here so **every front end says the same thing**. A window footer and a
-    /// `--version` that disagree are two claims about one binary.
+    /// The one-line form every front end shows: version, then the commit, or the build time
+    /// when there is no commit.
     #[must_use]
     pub fn line(&self) -> String {
         match (self.commit, self.built_at) {
@@ -270,12 +180,8 @@ impl Stamp {
 
 /// When the running executable was written, in seconds since the epoch.
 ///
-/// # Why the file's own time rather than a compile-time constant
-///
-/// A constant baked into a crate records when *that crate* was last compiled, which is not the
-/// same thing and is older whenever a change above it triggered the link. The executable's mtime
-/// is when the binary a person is actually running came into existence. One of the two original
-/// copies used a constant and was wrong in exactly this way.
+/// The executable's modification time, not a compile-time constant: a constant records when
+/// one crate was compiled, which predates the link whenever only a dependant changed.
 #[must_use]
 pub fn built_at() -> Option<u64> {
     let exe = std::env::current_exe().ok()?;
@@ -288,14 +194,8 @@ pub fn built_at() -> Option<u64> {
         .map(|since| since.as_secs())
 }
 
-/// Seconds since the epoch, as a date somebody can read.
-///
-/// Always UTC, and it says so: a build stamp in local time is ambiguous the moment it is pasted
-/// into a report by somebody in another place.
-///
-/// The first version of this emitted the raw seconds, on the grounds that it needed no
-/// dependency and no locale. It was correct and useless - the stamp exists to be read by a
-/// person glancing at a window, and `1787734934` is read by nobody.
+/// Seconds since the epoch as `YYYY-MM-DD HH:MM UTC`. Always UTC, so a pasted stamp is
+/// unambiguous.
 #[must_use]
 pub fn utc(seconds: u64) -> String {
     let seconds = i64::try_from(seconds).unwrap_or(0);
@@ -308,9 +208,8 @@ pub fn utc(seconds: u64) -> String {
 
 /// The civil date for a count of days since 1970-01-01.
 ///
-/// The standard era-based conversion: shift the epoch to the start of a 400-year era so the
-/// leap-year rules become arithmetic rather than branches. Left in the well-known form rather
-/// than rewritten to look nicer, so it can be checked against the published version.
+/// Howard Hinnant's era-based `civil_from_days`, kept in its published form so it can be
+/// checked against the source. This crate takes no dependencies, so no date library.
 fn civil(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -329,16 +228,13 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-/// Assembles a [`Stamp`] from values the macros captured at the call site.
-///
-/// Not called directly - see [`stamp!`].
+/// Assembles a [`Stamp`] from values captured at the call site. Used by [`stamp!`].
 #[doc(hidden)]
 #[must_use]
 pub fn assemble(version: &'static str, commit: Option<&'static str>) -> Stamp {
     Stamp {
         version,
-        // An empty variable and an unset one mean the same thing to a reader, and CI sets
-        // empty ones by accident far more often than it sets wrong ones.
+        // CI often exports an empty variable; empty means no commit.
         commit: commit.filter(|c| !c.is_empty()),
         built_at: built_at(),
     }
@@ -361,9 +257,6 @@ macro_rules! commit {
 }
 
 /// This build, as a [`Stamp`].
-///
-/// Expands at the call site so it reads the consumer's version and the consumer's stamped
-/// commit rather than this crate's.
 #[macro_export]
 macro_rules! stamp {
     () => {
@@ -371,20 +264,14 @@ macro_rules! stamp {
     };
 }
 
-/// This build in one line, borrowed for the life of the process.
+/// This build in one line, as a `&'static str`, for `clap`'s `version` attribute.
 ///
-/// # Why this is not just `stamp!().line()`
-///
-/// `clap` builds its `--version` text from a `&'static str`, and the line cannot be a `const`:
-/// part of it is when the *executable* was written, which is only knowable at run time. So it
-/// has to be computed once and kept, and every command-line tool in the collection needs the
-/// same three lines to do it. They are here instead.
+/// The line includes the executable's build time, which is known only at run time, so it is
+/// computed once and kept. Each expansion has its own storage.
 ///
 /// ```ignore
 /// #[command(version = oops_build::line!())]
 /// ```
-///
-/// Each expansion has its own storage, so using it twice in one crate is fine.
 #[macro_export]
 macro_rules! line {
     () => {{
@@ -397,9 +284,7 @@ macro_rules! line {
 mod tests {
     use super::*;
 
-    /// **A branch `HEAD` names its ref to follow; a detached one names nothing.** The bug this
-    /// closes: on a branch `HEAD` is a static `ref:` line, so watching it alone missed every commit
-    /// and the stamp went stale. Following the ref it names is what re-runs the stamp on a commit.
+    /// A branch `HEAD` names the ref to watch; a detached or empty one names nothing.
     #[test]
     fn a_symbolic_head_names_its_ref_and_a_detached_one_does_not() {
         assert_eq!(
@@ -410,35 +295,34 @@ mod tests {
             parse_head_reference("ref: refs/heads/feature/x\n").as_deref(),
             Some("refs/heads/feature/x")
         );
-        // A detached HEAD is a bare commit id, whose own file changes on a commit - no ref to follow.
         assert_eq!(parse_head_reference("b4f7e73aabbccddeeff0011\n"), None);
         assert_eq!(parse_head_reference("ref:   \n"), None);
         assert_eq!(parse_head_reference(""), None);
     }
 
+    /// Only a hex hash is shortened; a tag keeps its full name.
     #[test]
     fn a_hash_is_shortened_and_anything_else_is_not() {
         assert_eq!(shorten("a1b2c3d4e5f6a7b8"), "a1b2c3d");
-        // A tag truncated to seven characters looks like an identifier and identifies nothing.
         assert_eq!(shorten("v1.2.3"), "v1.2.3");
         assert_eq!(shorten("release-2026-08"), "release-2026-08");
-        // Already short enough to be left alone.
         assert_eq!(shorten("a1b2c3d"), "a1b2c3d");
     }
 
+    /// The epoch and a known date format correctly.
     #[test]
     fn the_epoch_and_a_known_date_read_correctly() {
         assert_eq!(utc(0), "1970-01-01 00:00 UTC");
-        // 2026-08-29 00:00:00 UTC.
         assert_eq!(utc(1_787_961_600), "2026-08-29 00:00 UTC");
     }
 
+    /// A leap day is a real date.
     #[test]
     fn a_leap_day_is_a_day() {
-        // 2024-02-29, the case a naive 365-day conversion gets wrong.
         assert_eq!(utc(1_709_164_800), "2024-02-29 00:00 UTC");
     }
 
+    /// A `-dirty` commit is populated but not exact.
     #[test]
     fn a_dirty_tree_is_not_an_exact_build() {
         let exact = Stamp {
@@ -452,11 +336,11 @@ mod tests {
             built_at: Some(0),
         };
         assert!(exact.is_exact());
-        // The point of the crate: `commit.is_some()` is true here and the answer is still no.
         assert!(!dirty.is_exact());
         assert!(dirty.commit.is_some());
     }
 
+    /// Without a commit, the line gives the build time and the stamp is not exact.
     #[test]
     fn a_build_with_no_commit_says_when_it_was_made_instead() {
         let local = Stamp {
@@ -468,13 +352,13 @@ mod tests {
         assert!(!local.is_exact());
     }
 
+    /// An empty commit variable counts as no commit.
     #[test]
     fn an_empty_commit_is_treated_as_no_commit() {
-        // CI exports an empty variable far more often than a wrong one, and `Some("")` would
-        // otherwise render as a stamp with a blank where the commit should be.
         assert_eq!(assemble("0.1.0", Some("")).commit, None);
     }
 
+    /// With neither commit nor build time there is still a line.
     #[test]
     fn nothing_at_all_still_produces_a_line() {
         let nothing = Stamp {

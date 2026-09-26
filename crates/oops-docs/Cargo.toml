@@ -8,8 +8,6 @@ repository.workspace = true
 
 [dependencies]
 egui = { workspace = true }
-# `default-features = false` drops the HTML writer, which is the half of this crate that
-# renders to a string nobody here wants - the output goes to egui, not to a page.
 pulldown-cmark = { workspace = true }
 
 [lints]

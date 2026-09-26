@@ -1,26 +1,15 @@
-# D002 - The build stamp is one implementation, because two had become complementary
+# D002 - One shared build stamp
 
+**Status:** decided
+**Date:** 2026-08-29
 
-**decided** · 2026-08-29 · measured by diffing the two build scripts
+Every binary stamps its build through `oops-build`: the commit from git (with `-dirty` for a
+modified tree, or from `OOPS_COMMIT` when CI supplies it), the version, and the executable's
+own modification time. `Stamp::is_exact` is the check for a reproducible build.
 
-Two projects had a build stamp. They were written to match each other - one says so in its own
-module comment - and they had still drifted into solving different halves:
+**Why:** per-project copies each covered half the job and none noticed its gap, because a
+stamp reading `no commit` looks like a local build rather than a defect.
 
-- Orbistoun asks git directly, handles a modified tree with `-dirty`, shortens hashes, and
-  watches `.git/HEAD`. It emits no build time and no assembled line.
-- Prosperous assembles a readable line with a UTC timestamp. Its commit comes from
-  `PROSPEROUS_COMMIT`, which **nothing sets** - not CI, not its own shell script, nowhere in the
-  repository outside the build script that reads it. Every binary it has ever produced is
-  stamped `no commit`. Its timestamp is also a constant baked into one crate, which records when
-  *that crate* was last compiled rather than when the binary was linked.
-
-Neither defect was noticed because neither looks like one. `no commit` reads as a local build.
-
-This is the argument for the whole repository, and it is why the stamp was extracted first
-rather than the documentation viewer, which was the request that started the work. A shared
-crate justified by "we might need this twice" is speculation. This one was already wrong twice.
-
-[`Stamp::is_exact`] exists because of it: report code that asks `commit.is_some()` gets `true`
-from a dirty tree, and the thing that hid the original defect was exactly a stamp that looked
-populated.
-
+**Rejected:**
+- A commit read only from an environment variable: correct only when something sets it.
+- A compile-time build timestamp: records when one crate compiled, not when the binary linked.

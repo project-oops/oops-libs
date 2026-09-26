@@ -6,10 +6,8 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# Deliberately none, and worth keeping that way. This crate is a dependency of every binary in
-# the collection *and* a build-dependency of each one, so anything added here is compiled twice
-# for every tool. The calendar arithmetic below exists because pulling `time` or `chrono` in for
-# one formatted string was the worse trade.
+# None. Every binary takes this crate as a dependency and a build-dependency, so anything
+# added here compiles twice per tool.
 [dependencies]
 
 [lints]

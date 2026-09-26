@@ -5,140 +5,87 @@
 //! std::fs::create_dir_all(paths.logs_dir()).unwrap();
 //! ```
 //!
-//! Only the locations every tool needs are here - a root, logs, cache, a config file. Anything
-//! that names a concept belonging to one project stays in that project: this crate should never
-//! learn what a title, a payload or a package is.
+//! Only locations every tool needs are named here: the roots, logs, cache, a config file and
+//! per-title data. Concepts owned by one project stay in that project.
 //!
-//! # Two layouts, and the platform's own is the default
+//! # One directory for the collection
 //!
-//! [`Layout::PlatformNative`] uses the directory the operating system nominates -
+//! Every tool resolves the same `OOPS` directory, so tools share files about the same titles
+//! and hardware. Only the config file is per tool, named after it (D013).
+//!
+//! # Layout
+//!
+//! [`Layout::PlatformNative`], the default, uses the directory the operating system nominates:
 //! `%APPDATA%\OOPS` on Windows, `~/Library/Application Support/OOPS` on macOS,
-//! `~/.local/share/OOPS` on Linux. [`Layout::Home`] puts everything under `$HOME/.config/OOPS`
-//! on every platform.
+//! `~/.local/share/OOPS` on Linux. [`Layout::Home`] uses `$HOME/.config/OOPS` everywhere, for
+//! a tool packaged in an `MSIX`/`AppX` container, where the platform directory is redirected
+//! out of the user's sight (D007).
 //!
-//! **`PlatformNative` is the default**, because it is where a person, a backup tool and a
-//! roaming profile all already look. A dotted directory under `$HOME` on Windows is a Unix
-//! convention that nothing on Windows knows about.
+//! # Two roots
 //!
-//! This was briefly the other way round, on the following reasoning: a tool running inside a
-//! packaged container has its writes to the per-user application data directory redirected into
-//! a per-package cache, invisible to the same user in an ordinary shell, and a configuration
-//! file the user cannot find is worse than none.
-//!
-//! **That effect is real and it is not this collection's.** It applies to an application running
-//! *inside* an `MSIX`/`AppX` container. These are plain executables, so the hazard was borrowed
-//! from a case that does not apply, and generalising it cost the platform's own answer
-//! everywhere. `Home` stays available for a tool that is genuinely packaged, which is when it
-//! becomes the right choice rather than a cautious one.
+//! [`Paths::data_root`] holds what a person would carry to their next machine: config, saves,
+//! established names. [`Paths::cache_root`] holds what can be rebuilt: models, runtimes,
+//! shaders, downloads, traces, logs. On Windows they are roaming and local application data;
+//! on Linux and macOS, the data and cache directories. In a portable run they are the same
+//! directory (D014).
 //!
 //! # Portable mode
 //!
-//! A portable run keeps everything beside the binary and touches nothing else on the machine. It
-//! turns on when **any** of these is true, checked in this order:
+//! A portable run keeps everything beside the binary. It is on when any of these holds:
 //!
-//! 1. `<APP>_PORTABLE` or `OOPS_PORTABLE` is set to `1`, `true`, `yes` or `on`.
-//! 2. A `.portable` directory sits beside the executable - see [`enable_portable_sentinel`].
-//! 3. The executable's own name contains `portable`, which is how a downloaded build can
-//!    announce itself without anybody configuring anything.
+//! 1. `<APP>_PORTABLE` or `OOPS_PORTABLE` is `1`, `true`, `yes` or `on`.
+//! 2. A `.portable` directory sits beside the executable ([`enable_portable_sentinel`]).
+//! 3. The executable's name contains `portable`.
 //!
-//! An explicit `<APP>_DATA_DIR` (or `OOPS_DATA_DIR`) beats the layout but **not** portable mode:
-//! somebody who asked for a self-contained run gets one.
+//! Precedence: portable mode, then `<APP>_DATA_DIR` or `OOPS_DATA_DIR`, then the layout.
 //!
-//! # Two roots, because not everything deserves to be carried
+//! # Nowhere to write
 //!
-//! Windows distinguishes *roaming* application data from *local*, and it is not a formality: a
-//! domain profile synchronises the roaming one at logon. Four gigabytes of downloaded model
-//! weights in there is a slow login for something that can be fetched again.
-//!
-//! So [`Paths::data_root`] is what a person would want on their next machine - configuration,
-//! the address book, saves, established names - and [`Paths::cache_root`] is what can be
-//! rebuilt: models, runtimes, compiled shaders, downloaded packages, traces, logs.
-//!
-//! On Linux and macOS this is the same distinction the platform already makes
-//! (`~/.local/share` against `~/.cache`, `Application Support` against `Caches`), so it is one
-//! rule rather than a Windows special case. **In a portable run they are the same directory**,
-//! because the point of portable mode is that everything is in one place somebody can carry.
-//!
-//! # When there is nowhere
-//!
-//! No home directory *and* no readable executable location is rare and real. What should happen
-//! is the application's call, not this crate's, so it is a parameter - see [`Nowhere`]:
+//! With no home directory and no readable executable location, the caller chooses through
+//! [`Nowhere`] whether to fall back to the working directory or get `None` (D009):
 //!
 //! ```no_run
 //! # use oops_paths::{Options, Paths};
-//! // A cache: somewhere is better than nowhere.
 //! let paths = Paths::resolve("orbistoun");
-//!
-//! // A registry a person will go looking for: refuse rather than hide it.
 //! let paths = Paths::resolve_with_options("prosperous", Options::new().refusing());
 //! ```
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// The directory beside the binary that marks a portable installation.
-///
-/// Not named after any one tool, so a directory holding several of them is portable for all of
-/// them at once - which is what somebody unpacking a bundle onto a stick expects.
+/// The directory beside the binary that marks a portable installation. Shared by every tool,
+/// so one bundle directory is portable for all of them.
 pub const PORTABLE_DIR: &str = ".portable";
 
-/// The file written inside the sentinel to say what that directory is for.
-///
-/// The *name* is shared, so a note is in the same place whichever tool wrote it. The *words* are
-/// not - they name a tool, so they arrive as an argument. See [`enable_portable_sentinel`].
+/// The note written inside [`PORTABLE_DIR`]. The name is shared; the words are the caller's.
 pub const PORTABLE_NOTE: &str = "PORTABLE.txt";
 
 /// The directory every project in the collection writes to.
-///
-/// # One directory, not one per project
-///
-/// Because they are about the same platform and the same titles. Prosperous pulls a save off
-/// real hardware; Orbistoun mounts it. obSCEne records which machine it probed; Prosperous
-/// already knows that machine's address. Cheats, titles, reports and the address book are all
-/// facts about the platform rather than possessions of one tool.
-///
-/// This began as a subdirectory per project with a `shared/` beside them, on the grounds that
-/// the configs have different shapes and "delete what Orbistoun kept" should be one operation.
-/// **It was the wrong default.** Partitioning by tool made sharing the exception that had to be
-/// argued for each time, when sharing is the reason these four live together at all - and the
-/// partition was buying almost nothing: across the three projects that had written anything,
-/// **no filename appeared in more than one of them.**
-///
-/// The one thing that would genuinely collide is a per-tool configuration file, so those are
-/// named after the tool - see [`Paths::config_file`] - rather than buried a directory deep.
 pub const OOPS_DIR: &str = "OOPS";
 
 /// Where the root goes when the run is not portable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layout {
-    /// The directory the operating system nominates. The default - see the crate note.
-    ///
-    /// Needs the `platform-dirs` feature, which is on by default; without it this behaves as
-    /// [`Layout::Home`], because falling back to a working location beats failing to start.
+    /// The directory the operating system nominates. Without the `platform-dirs` feature this
+    /// behaves as [`Layout::Home`].
     #[default]
     PlatformNative,
-    /// `$HOME/.config/OOPS`, on every platform.
-    ///
-    /// Right for an application that is packaged in a container, where the platform's own
-    /// directory is redirected somewhere the user cannot reach. See the crate note.
+    /// `$HOME/.config/OOPS` on every platform, for a tool running inside a packaged container.
     Home,
 }
 
-/// What the environment says, read once so resolution can be tested without touching it.
+/// The environment variables resolution reads, captured once so tests can supply them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EnvSnapshot {
-    /// Whether a portable variable was set to something truthy.
+    /// Whether a portable variable is truthy.
     pub portable_flag: bool,
     /// An explicit data root, if one was given.
     pub data_dir: Option<PathBuf>,
 }
 
 impl EnvSnapshot {
-    /// Reads the real process environment for one application.
-    ///
-    /// The application's own variable wins over the shared one, so two tools from this
-    /// collection can be pointed at different roots in the same shell - which a single
-    /// `OOPS_DATA_DIR` would make impossible.
+    /// Reads the process environment for `app`. `<APP>_...` wins over `OOPS_...`, so two
+    /// tools in one shell can use different roots.
     #[must_use]
     pub fn from_process(app: &str) -> Self {
         let prefix = app.to_ascii_uppercase().replace(['-', ' '], "_");
@@ -157,11 +104,8 @@ impl EnvSnapshot {
     }
 }
 
-/// Whether an environment value counts as "on".
-///
-/// Deliberately narrow and case-insensitive. An unrecognised value is **not** truthy, because
-/// silently reading `OOPS_PORTABLE=no` as on would be exactly the kind of surprise portable mode
-/// must not have.
+/// Whether an environment value means "on": `1`, `true`, `yes` or `on`, any case. Anything
+/// else is off.
 fn is_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -169,38 +113,22 @@ fn is_truthy(value: &str) -> bool {
     )
 }
 
-/// What resolution reads about the running process.
-///
-/// Gathered into one value so it can be built by hand in a test - the rules are worth checking
-/// without a real home directory, a real environment or a real executable, and none of those
-/// can be arranged from inside a test that must not touch the machine it runs on.
+/// Everything resolution reads about the running process, as a value a test can build.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Process {
-    /// The environment, already read.
+    /// The environment.
     pub env: EnvSnapshot,
-    /// Where the executable lives, if that can be determined.
+    /// The executable's directory, if known.
     pub binary_dir: Option<PathBuf>,
-    /// The executable's file stem, if that can be determined.
+    /// The executable's file stem, if known.
     pub binary_name: Option<String>,
-    /// The user's home directory, if this machine has one.
-    ///
-    /// Carried here rather than read where it is used, so that "a machine with no home" is a
-    /// value a test can construct. It is the condition the whole [`Nowhere`] policy exists for,
-    /// and a rule that can only be exercised on a machine that happens to lack a home directory
-    /// is a rule nobody ever checks.
+    /// The user's home directory, if the machine has one.
     pub home: Option<PathBuf>,
-    /// The directory the operating system nominates for application data.
-    ///
-    /// `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `~/.local/share` on
-    /// Linux. Carried for exactly the same reason as [`Process::home`], and it had to be: when
-    /// this was read where it was used, the platform lookup answered from the real machine and
-    /// the "nowhere to write" branch became unreachable from a test again - the second time the
-    /// same hole opened, through the same cause.
+    /// The platform's application-data directory: `%APPDATA%`,
+    /// `~/Library/Application Support`, `~/.local/share`.
     pub platform_data: Option<PathBuf>,
-    /// The directory the operating system nominates for material that can be rebuilt.
-    ///
-    /// `%LOCALAPPDATA%` on Windows, `~/Library/Caches` on macOS, `~/.cache` on Linux. `None`
-    /// falls back to [`Process::platform_data`], so a machine that offers only one gets one.
+    /// The platform's cache directory: `%LOCALAPPDATA%`, `~/Library/Caches`, `~/.cache`.
+    /// `None` falls back to [`Process::platform_data`].
     pub platform_cache: Option<PathBuf>,
 }
 
@@ -224,7 +152,7 @@ impl Process {
     }
 }
 
-/// The platform's own cache directory, when the feature that can find it is on.
+/// The platform's cache directory, when the `platform-dirs` feature is on.
 fn platform_cache_dir() -> Option<PathBuf> {
     #[cfg(feature = "platform-dirs")]
     {
@@ -236,7 +164,7 @@ fn platform_cache_dir() -> Option<PathBuf> {
     }
 }
 
-/// The platform's own application-data directory, when the feature that can find it is on.
+/// The platform's application-data directory, when the `platform-dirs` feature is on.
 fn platform_data_dir() -> Option<PathBuf> {
     #[cfg(feature = "platform-dirs")]
     {
@@ -252,41 +180,25 @@ fn platform_data_dir() -> Option<PathBuf> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     data_root: PathBuf,
-    /// Where rebuildable bulk goes. The same as `data_root` in a portable run.
     cache_root: PathBuf,
-    /// Which tool is asking. Not part of any directory - it names this tool's configuration
-    /// file, and prefixes the environment variables it answers to.
+    /// The asking tool; names its config file.
     app: String,
     portable: bool,
 }
 
-/// What resolution should do when the machine offers nowhere proper to write.
-///
-/// This arises when there is no home directory *and* the executable's own location cannot be
-/// read - rare, and real: some launchers, some containers, some sandboxes.
-///
-/// The choice belongs to the application rather than to this crate, because the two answers
-/// suit different tools and neither is wrong:
+/// What resolution does when the machine offers no home and no readable executable location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Nowhere {
-    /// Use a directory named after the application, under the working directory.
-    ///
-    /// Right for a tool that just needs somewhere to put a cache and would rather run than
-    /// refuse.
+    /// Use a directory under the working directory. For a tool that needs somewhere for a
+    /// cache and would rather run than refuse.
     #[default]
     UseWorkingDirectory,
-    /// Resolve to nothing, so the caller can say so.
-    ///
-    /// Right for a tool keeping something a person will go looking for later. **A
-    /// configuration file the user cannot find is worse than no configuration file**, and a
-    /// registry written beside wherever they happened to be standing is exactly that.
+    /// Resolve to `None`. For a tool keeping something a person will look for later, which
+    /// must not land wherever they happened to be standing.
     Refuse,
 }
 
-/// Everything resolution is allowed to vary by.
-///
-/// A struct rather than a widening list of arguments, and rather than a `bool` that reads as
-/// `resolve(app, true, false)` at the call site.
+/// What resolution may vary by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Options {
     /// Where the non-portable root goes.
@@ -296,7 +208,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// Defaults: [`Layout::PlatformNative`] and [`Nowhere::UseWorkingDirectory`].
+    /// [`Layout::PlatformNative`] and [`Nowhere::UseWorkingDirectory`].
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -309,7 +221,7 @@ impl Options {
         self
     }
 
-    /// Refuse rather than write to the working directory.
+    /// Refuses rather than writing to the working directory.
     #[must_use]
     pub const fn refusing(mut self) -> Self {
         self.nowhere = Nowhere::Refuse;
@@ -318,48 +230,28 @@ impl Options {
 }
 
 impl Paths {
-    /// Resolves for the current process with default [`Options`].
-    ///
-    /// Never fails: with [`Nowhere::UseWorkingDirectory`] there is always an answer. A tool that
-    /// would rather refuse wants [`Paths::resolve_with_options`] and
-    /// [`Options::refusing`].
+    /// Resolves for the current process with default [`Options`]. Never fails.
     #[must_use]
     pub fn resolve(app: &str) -> Self {
         Self::resolve_found(app, Layout::default(), &Process::read(app)).0
     }
 
-    /// Resolves for the current process.
-    ///
-    /// `None` only when [`Options::nowhere`] is [`Nowhere::Refuse`] and there was nowhere.
+    /// Resolves for the current process. `None` only when refusing and there is nowhere.
     #[must_use]
     pub fn resolve_with_options(app: &str, options: Options) -> Option<Self> {
-        let (paths, proper) = Self::resolve_found(app, options.layout, &Process::read(app));
-        (proper || options.nowhere != Nowhere::Refuse).then_some(paths)
+        Self::resolve_with(app, options, &Process::read(app))
     }
 
-    /// Resolution core, parameterised on every input it reads.
-    ///
-    /// Separate from [`Paths::resolve`] so the rules can be tested without a real environment, a
-    /// real home directory, or a real executable. `binary_dir` is `None` where it cannot be
-    /// determined, in which case the sentinel is not looked for and a forced portable run is
-    /// rooted at the working directory.
+    /// Resolves from a given [`Process`]. `None` only when refusing and there is nowhere.
     #[must_use]
     pub fn resolve_with(app: &str, options: Options, process: &Process) -> Option<Self> {
         let (paths, proper) = Self::resolve_found(app, options.layout, process);
         (proper || options.nowhere != Nowhere::Refuse).then_some(paths)
     }
 
-    /// Resolution itself: always an answer, plus whether it is a proper one.
-    ///
-    /// The infallible half. [`Nowhere`] is applied by the callers above rather than in here, so
-    /// this has no way to fail and needs no `unwrap` anywhere to express "the default cannot
-    /// refuse" - splitting *compute* from *is this acceptable* removes the unreachable branch
-    /// rather than documenting it.
-    ///
-    /// Public because a caller may want the same split: orbistoun layers a dozen directories of
-    /// its own on top of this root and always wants one, so it takes the answer and ignores the
-    /// flag. Going through [`Paths::resolve_with`] would have meant an `expect` at that call
-    /// site for a branch that cannot happen - which is the thing this shape exists to avoid.
+    /// Resolves from a given [`Process`], always returning an answer plus whether it is a
+    /// proper location. For a caller that always wants a root and applies no [`Nowhere`]
+    /// policy.
     #[must_use]
     pub fn resolve_found(app: &str, layout: Layout, process: &Process) -> (Self, bool) {
         let binary_dir = process.binary_dir.as_deref();
@@ -369,73 +261,44 @@ impl Paths {
             .as_ref()
             .is_some_and(|n| n.to_ascii_lowercase().contains("portable"));
 
-        // Checked before the explicit root on purpose: somebody who asked for a self-contained
-        // run gets one, and a stale variable in their shell does not quietly undo it.
+        // Portable mode beats an explicit root, so a stale variable cannot undo it.
         if process.env.portable_flag || sentinel || named {
-            // No binary directory is the same "nowhere proper" condition as no home: the run
-            // would be rooted at whatever directory the user happened to be standing in.
+            // With no binary directory the run is rooted at the working directory, which is
+            // not a proper location.
             let base = binary_dir.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-            // The portable root *is* the collection root - a stick holding several of these
-            // tools shares between them exactly as an installed set does.
+            let root = base.join(PORTABLE_DIR);
             return (
-                Self::under(&base.join(PORTABLE_DIR), app, true),
+                Self::new(root.clone(), root, app, true),
                 binary_dir.is_some(),
             );
         }
+        // An explicit root is used as given, with no `OOPS` appended, for data and cache.
         if let Some(dir) = process.env.data_dir.as_ref() {
-            // Somebody who names a path means that path: no `OOPS` appended, because they have
-            // already said where the collection is.
-            return (
-                Self {
-                    data_root: dir.clone(),
-                    // Somebody who named one directory meant one directory.
-                    cache_root: dir.clone(),
-                    app: app.to_owned(),
-                    portable: false,
-                },
-                true,
-            );
+            return (Self::new(dir.clone(), dir.clone(), app, false), true);
         }
         let (base, proper) = default_root(layout, process);
-        // The cache falls back to the data root when the platform offers no separate one, so a
-        // machine with a single directory still works and nothing has to handle an absence.
         let cache = match (layout, process.platform_cache.as_ref()) {
             (Layout::PlatformNative, Some(native)) => native.join(OOPS_DIR),
             _ => base.clone(),
         };
-        (Self::split(&base, &cache, app), proper)
+        (Self::new(base, cache, app, false), proper)
     }
 
-    /// The collection's directory, which is every tool's directory.
-    fn under(oops_root: &Path, app: &str, portable: bool) -> Self {
+    fn new(data_root: PathBuf, cache_root: PathBuf, app: &str, portable: bool) -> Self {
         Self {
-            data_root: oops_root.to_path_buf(),
-            cache_root: oops_root.to_path_buf(),
+            data_root,
+            cache_root,
             app: app.to_owned(),
             portable,
         }
     }
 
-    /// The same, with a separate home for what can be rebuilt.
-    fn split(data_root: &Path, cache_root: &Path, app: &str) -> Self {
-        Self {
-            data_root: data_root.to_path_buf(),
-            cache_root: cache_root.to_path_buf(),
-            app: app.to_owned(),
-            portable: false,
-        }
-    }
-
-    /// Builds from a root somebody else chose. For tests, and for a caller with its own rule.
+    /// Paths under a root chosen by the caller, with the cache in the same place. For tests
+    /// and callers with their own rule.
     #[must_use]
     pub fn rooted_at(data_root: impl Into<PathBuf>) -> Self {
         let data_root = data_root.into();
-        Self {
-            cache_root: data_root.clone(),
-            data_root,
-            app: "oops".to_owned(),
-            portable: false,
-        }
+        Self::new(data_root.clone(), data_root, "oops", false)
     }
 
     /// Whether this run is confined beside its binary.
@@ -444,61 +307,47 @@ impl Paths {
         self.portable
     }
 
-    /// The root everything else hangs off.
+    /// The root for data worth keeping.
     #[must_use]
     pub fn data_root(&self) -> &Path {
         &self.data_root
     }
 
-    /// Everything known about one title, by its identifier.
+    /// Everything known about one title, by identifier.
     ///
-    /// `fs/` under it is the title's guest filesystem, **shaped by the guest's own paths**:
-    /// Prosperous writes one by pulling `savedata` off real hardware, Orbistoun mounts the same
-    /// tree as that title's overlay. Neither had to learn the other's format, because the
-    /// guest's path is the format.
+    /// `fs/` under it is the title's guest filesystem, laid out by the guest's own paths:
+    /// Prosperous pulls `savedata` into it from hardware and Orbistoun mounts it as the
+    /// title's overlay.
     #[must_use]
     pub fn title_dir(&self, title: &str) -> PathBuf {
         self.data_root.join("titles").join(title)
     }
 
-    /// Where rebuildable bulk goes: models, runtimes, compiled shaders, downloads, logs.
-    ///
-    /// A separate directory from [`Paths::data_root`] on every platform that distinguishes
-    /// them, and the same directory in a portable run. See the crate note.
+    /// The root for rebuildable material. Equal to [`Paths::data_root`] in a portable run.
     #[must_use]
     pub fn cache_root(&self) -> &Path {
         &self.cache_root
     }
 
-    /// Where log files go. Hand this to `oops-log`'s `to_file`.
-    ///
-    /// Under the cache root: a log is a record of one machine's run, and carrying it to another
-    /// machine would be carrying somebody else's answers.
+    /// Where log files go; a log belongs to one machine, so it is under the cache root.
     #[must_use]
     pub fn logs_dir(&self) -> PathBuf {
         self.cache_root.join("logs")
     }
 
-    /// Where regenerable material goes.
-    ///
-    /// Named so that deleting the whole directory is obviously safe - anything that could not
-    /// survive that does not belong in it.
+    /// Regenerable material. Deleting the whole directory is always safe.
     #[must_use]
     pub fn cache_dir(&self) -> PathBuf {
         self.cache_root.join("cache")
     }
 
-    /// This tool's configuration file, named after the tool.
-    ///
-    /// `orbistoun.toml`, `prosperous.toml`. **The one thing that would genuinely collide** now
-    /// that the tools share a directory - a bare `config.toml` each. Naming them costs nothing
-    /// and avoids the only real argument for partitioning by tool.
+    /// This tool's config file, `<app>.toml` in the data root.
     #[must_use]
     pub fn config_file(&self) -> PathBuf {
         self.data_root.join(format!("{}.toml", self.app))
     }
 
-    /// Every directory this type names, for a tool that wants to show a person where things are.
+    /// Every directory this type names, for display.
     #[must_use]
     pub fn named_dirs(&self) -> Vec<(&'static str, PathBuf)> {
         vec![
@@ -510,12 +359,11 @@ impl Paths {
         ]
     }
 
-    /// Creates the directories, so a caller can fail early and once rather than at each write.
+    /// Creates every named directory.
     ///
     /// # Errors
     ///
-    /// If any directory cannot be created. The error names the path, because "permission denied"
-    /// without one is a message that sends somebody looking.
+    /// If a directory cannot be created; the error names the path.
     pub fn ensure_dirs(&self) -> io::Result<()> {
         for (_, dir) in self.named_dirs() {
             std::fs::create_dir_all(&dir).map_err(|error| {
@@ -526,36 +374,23 @@ impl Paths {
     }
 }
 
-/// The collection's root under a layout, and whether it is a real location.
+/// The collection root under a layout, and whether it is a proper location.
 ///
-/// The *collection's*, not the application's - the application name is appended by
-/// [`Paths::under`], so every project lands beside its siblings rather than beside unrelated
-/// software.
-///
-/// Reads nothing. Both candidate directories arrive on [`Process`], so every branch here -
-/// including "this machine offers nowhere" - can be reached from a test.
+/// Falls back from the platform directory to the home layout, and from the home layout to
+/// `OOPS` under the working directory, which is not proper.
 fn default_root(layout: Layout, process: &Process) -> (PathBuf, bool) {
-    // A let-chain rather than two nested `if`s. Edition 2024 stabilised them, and clippy's
-    // `collapsible_if` fires on the nested form there - so this shape is what the edition the
-    // rest of the collection uses actually asks for.
-    //
-    // Falling through means no platform directory, which also means the feature that finds one
-    // is off. The home layout below is the fallback rather than a failure: somewhere the user
-    // can find beats refusing to start.
     if layout == Layout::PlatformNative
         && let Some(native) = process.platform_data.as_ref()
     {
         return (native.join(OOPS_DIR), true);
     }
     process.home.as_ref().map_or_else(
-        // Nowhere to call home either. A visible directory under the working directory beats
-        // panicking - but the caller is told, so it can refuse instead. See `Nowhere`.
         || (PathBuf::from(OOPS_DIR), false),
         |home| (home.join(".config").join(OOPS_DIR), true),
     )
 }
 
-/// The user's home directory, without a dependency for it.
+/// The user's home directory, from `USERPROFILE` or `HOME`.
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -563,40 +398,19 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Marks a directory as a portable installation by creating the sentinel.
+/// Marks `binary_dir` as a portable installation by creating [`PORTABLE_DIR`] there.
 ///
-/// A `.portable` **file** found in the way is removed first. It is not a marker of the wrong
-/// shape that could be left alone: the sentinel and the portable root are the same path, so a
-/// file with that name *is* the root, occupied by something no write can go into.
-/// [`Paths::resolve_found`] tests it with `exists()`, which a file satisfies, so such a run is
-/// already portable and already rooted there - every write beneath it fails, this one included,
-/// and the failure arrives on first run rather than at the call that set the mode. The
-/// marker-*file* convention is the common one: a sibling in the collection shipped it and hit
-/// exactly this, and somebody creating one by hand arrives at the same place.
-///
-/// # The note is the caller's words
-///
-/// `note` is written inside the sentinel as [`PORTABLE_NOTE`], saying what the directory does
-/// and how to undo it, so it is not a mystery folder somebody finds later. The words name a
-/// tool, so they cannot live here - and they arrive as an argument rather than being each
-/// caller's own business because the alternative is each caller keeping a copy of this entire
-/// function, which is the duplication the argument exists to end.
-///
-/// `None` writes **no file**, rather than an empty one. A zero-byte note beside the sentinel
-/// reads as a write that failed and sends somebody investigating; an absent one reads as a
-/// caller with nothing to say, which is what it is.
+/// A `.portable` file in the way is replaced: the sentinel is also the portable root, so a
+/// file there makes the run portable with nowhere to write. `note`, when given, is written as
+/// [`PORTABLE_NOTE`] to say what the directory does; `None` writes no file. Calling this again
+/// is a no-op.
 ///
 /// # Errors
 ///
-/// If the stale file cannot be removed; if the directory cannot be created - typically an
-/// installation directory the user cannot write to, which is exactly the case where they wanted
-/// portable mode and cannot have it, so it is worth reporting rather than swallowing; or if the
-/// note cannot be written. **A failed note fails the call.** A sentinel with nothing in it is a
-/// half-made thing, and a caller that asked for a note and did not get one should hear so.
+/// If the stale file cannot be removed, the directory cannot be created, or the note cannot be
+/// written.
 pub fn enable_portable_sentinel(binary_dir: &Path, note: Option<&str>) -> io::Result<()> {
     let sentinel = binary_dir.join(PORTABLE_DIR);
-    // `is_file` and not `exists`: a directory here is the sentinel already in place, which is
-    // the ordinary repeat call and must stay silent.
     if sentinel.is_file() {
         std::fs::remove_file(&sentinel)?;
     }
@@ -604,7 +418,6 @@ pub fn enable_portable_sentinel(binary_dir: &Path, note: Option<&str>) -> io::Re
     let Some(body) = note else {
         return Ok(());
     };
-    // After the directory, necessarily - and returned rather than dropped.
     std::fs::write(sentinel.join(PORTABLE_NOTE), body)
 }
 
@@ -612,7 +425,7 @@ pub fn enable_portable_sentinel(binary_dir: &Path, note: Option<&str>) -> io::Re
 mod tests {
     use super::*;
 
-    /// A process with somewhere to stand, which is the ordinary case.
+    /// A process with a binary, a home and platform directories.
     fn process(portable: bool, data_dir: Option<&str>, name: Option<&str>) -> Process {
         Process {
             env: EnvSnapshot {
@@ -627,7 +440,7 @@ mod tests {
         }
     }
 
-    /// A process with nowhere: no home to be found and no readable executable location.
+    /// A process with no home and no executable location.
     fn nowhere(portable: bool) -> Process {
         Process {
             env: EnvSnapshot {
@@ -646,10 +459,9 @@ mod tests {
         Paths::resolve_with("app", options, process)
     }
 
+    /// Portable mode wins over an explicit root.
     #[test]
     fn portable_beats_an_explicit_root() {
-        // Somebody who asked for a self-contained run gets one; a variable left in their shell
-        // does not quietly undo it.
         let paths = resolve(
             Options::new(),
             &process(true, Some("/elsewhere"), Some("app")),
@@ -659,6 +471,7 @@ mod tests {
         assert_eq!(paths.data_root(), Path::new("/opt/app").join(PORTABLE_DIR));
     }
 
+    /// An explicit root wins over the layout.
     #[test]
     fn an_explicit_root_beats_the_layout() {
         let paths = resolve(
@@ -670,6 +483,7 @@ mod tests {
         assert_eq!(paths.data_root(), Path::new("/elsewhere"));
     }
 
+    /// An executable whose name contains `portable` runs portable.
     #[test]
     fn a_binary_calling_itself_portable_is_portable() {
         let paths = resolve(
@@ -680,39 +494,35 @@ mod tests {
         assert!(paths.is_portable());
     }
 
+    /// Only the listed values turn portable mode on; `no` does not.
     #[test]
     fn only_recognised_values_turn_portable_mode_on() {
         for on in ["1", "true", "YES", " on "] {
             assert!(is_truthy(on), "{on:?} should be on");
         }
-        // The one that matters: reading `no` as on would be the surprise portable mode must
-        // never have.
         for off in ["no", "0", "false", "off", "", "maybe"] {
             assert!(!is_truthy(off), "{off:?} should not be on");
         }
     }
 
+    /// With nowhere to stand, the default falls back to the working directory.
     #[test]
     fn nowhere_to_stand_falls_back_by_default() {
-        // The default is to run rather than refuse, so there is an answer and it is under the
-        // working directory.
         let paths = resolve(Options::new(), &nowhere(true)).unwrap();
         assert!(paths.is_portable());
         assert_eq!(paths.data_root(), Path::new(".").join(PORTABLE_DIR));
     }
 
+    /// With nowhere to stand, refusing yields `None`.
     #[test]
     fn nowhere_to_stand_refuses_when_asked_to() {
-        // The same condition, and the other answer. A registry written beside wherever the
-        // user happened to be standing is a file they will never find again.
         assert!(resolve(Options::new().refusing(), &nowhere(true)).is_none());
         assert!(resolve(Options::new().refusing(), &nowhere(false)).is_none());
     }
 
+    /// Refusing changes nothing when there is a proper location.
     #[test]
     fn refusing_changes_nothing_when_there_is_somewhere_to_stand() {
-        // The parameter must only govern the edge case. If it altered the ordinary answer it
-        // would be a second layout rather than a policy about failure.
         let here = process(true, None, Some("app"));
         assert_eq!(
             resolve(Options::new(), &here),
@@ -720,29 +530,26 @@ mod tests {
         );
     }
 
+    /// An explicit root is a proper answer even when refusing.
     #[test]
     fn an_explicit_root_is_an_answer_even_when_refusing() {
-        // Somebody who named a directory has answered the question themselves, so there is
-        // nothing left to refuse - even on a machine with nowhere else at all.
         let mut nothing = nowhere(false);
         nothing.env.data_dir = Some(PathBuf::from("/elsewhere"));
         let paths = resolve(Options::new().refusing(), &nothing).unwrap();
         assert_eq!(paths.data_root(), Path::new("/elsewhere"));
     }
 
+    /// The default layout is the platform's data directory.
     #[test]
     fn the_default_layout_is_the_platform_s_own() {
-        // The default, and the thing most likely to be "simplified" back to a dotted directory
-        // under `$HOME` by somebody who has only ever run this on Linux.
         let paths = resolve(Options::new(), &process(false, None, Some("app"))).unwrap();
         assert_eq!(paths.data_root(), Path::new("/appdata").join(OOPS_DIR));
         assert!(!paths.is_portable());
     }
 
+    /// The home layout is `.config/OOPS` under the home directory.
     #[test]
     fn the_home_layout_is_a_dotted_directory_under_the_home() {
-        // Available for an application packaged in a container, where the platform's own
-        // directory is redirected somewhere the user cannot reach.
         let options = Options::new().layout(Layout::Home);
         let paths = resolve(options, &process(false, None, Some("app"))).unwrap();
         assert_eq!(
@@ -752,26 +559,21 @@ mod tests {
         assert!(!paths.is_portable());
     }
 
+    /// Two tools share the root and title directories; only their config files differ.
     #[test]
     fn two_projects_resolve_to_the_same_directory() {
-        // The whole reason for one root. A save Prosperous pulls off real hardware and the
-        // overlay Orbistoun mounts have to be the same tree, or this is four tools that merely
-        // live near each other.
         let here = process(false, None, Some("app"));
         let one = Paths::resolve_with("prosperous", Options::new(), &here).unwrap();
         let two = Paths::resolve_with("orbistoun", Options::new(), &here).unwrap();
         assert_eq!(one.data_root(), two.data_root());
         assert_eq!(one.title_dir("CUSA00001"), two.title_dir("CUSA00001"));
-        // The one thing that is per-tool, because a bare `config.toml` each is the only real
-        // collision a shared directory has.
         assert_ne!(one.config_file(), two.config_file());
         assert!(one.config_file().ends_with("prosperous.toml"));
     }
 
+    /// Portable tools beside one another share one root too.
     #[test]
     fn a_portable_run_shares_between_projects_too() {
-        // A stick holding several of these tools shares exactly as an installed set does,
-        // rather than being a special case somebody discovers later.
         let here = process(true, None, Some("app"));
         let one = Paths::resolve_with("prosperous", Options::new(), &here).unwrap();
         let two = Paths::resolve_with("orbistoun", Options::new(), &here).unwrap();
@@ -779,10 +581,9 @@ mod tests {
         assert!(one.data_root().starts_with("/opt/app"));
     }
 
+    /// Logs and cache go to the platform cache root, not the data root.
     #[test]
     fn bulk_goes_to_the_cache_root_and_not_the_roaming_one() {
-        // Four gigabytes of model weights in a roaming profile is a slow login for something
-        // that can be downloaded again. The two roots are what stops that.
         let paths = resolve(Options::new(), &process(false, None, Some("app"))).unwrap();
         assert_eq!(paths.data_root(), Path::new("/appdata").join(OOPS_DIR));
         assert_eq!(
@@ -792,16 +593,15 @@ mod tests {
         assert!(paths.logs_dir().starts_with(paths.cache_root()));
     }
 
+    /// A portable run keeps data and cache in one directory.
     #[test]
     fn a_portable_run_keeps_everything_in_one_directory() {
-        // The whole point of portable mode is that it can be carried, so splitting it across
-        // two directories would defeat it - and the platform's own cache directory is not on
-        // the stick.
         let paths = resolve(Options::new(), &process(true, None, Some("app"))).unwrap();
         assert_eq!(paths.data_root(), paths.cache_root());
         assert!(paths.logs_dir().starts_with(paths.data_root()));
     }
 
+    /// Every named directory and the config file sit under the root.
     #[test]
     fn the_directories_all_sit_under_the_root() {
         let paths = Paths::rooted_at("/data/app");
@@ -815,87 +615,61 @@ mod tests {
         assert!(paths.config_file().starts_with("/data/app"));
     }
 
+    /// A hyphenated app name reads its variables without panicking.
     #[test]
     fn an_apps_own_variable_is_named_after_it() {
-        // Two tools in one shell must be able to disagree about where their data lives, which a
-        // single shared variable would make impossible.
         let snapshot = EnvSnapshot::from_process("obscene-tool");
-        // Nothing is set in the test environment; what is pinned is that reading a hyphenated
-        // name does not panic and produces the empty answer.
         assert_eq!(snapshot, EnvSnapshot::default());
     }
 
-    /// A directory of this crate's own under the system's temporary one.
-    ///
-    /// Written by hand because `oops-paths` has no dev-dependencies either: a crate whose whole
-    /// argument is that it costs its consumers nothing should not reach for a crate to test
-    /// itself with.
+    /// A fresh directory under the system temporary one.
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("oops-paths-{}-{tag}", std::process::id()));
-        // A run that failed before its own cleanup leaves this behind, and a test that inherits
-        // it is testing whatever the last one left.
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the system temporary directory should be writable");
         dir
     }
 
+    /// A `.portable` file blocks every write; enabling the sentinel replaces it with a
+    /// directory, and enabling again is a no-op.
     #[test]
     fn a_stale_portable_file_is_healed_rather_than_left_to_fail_every_write() {
-        // The only test here that touches a real filesystem, because this is a defect about
-        // what is on one: the sentinel and the portable root are the same path, so a `.portable`
-        // *file* is not a marker of the wrong shape - it is the root, occupied.
         let dir = scratch("stale-sentinel");
         let sentinel = dir.join(PORTABLE_DIR);
-        std::fs::write(&sentinel, b"the marker an older scheme wrote").expect("should write");
+        std::fs::write(&sentinel, b"a marker file").expect("should write");
 
-        // The trap in full: the file already does the sentinel's job, so the run is portable
-        // and rooted at a path nothing can be created beneath.
         let mut here = process(false, None, Some("app"));
         here.binary_dir = Some(dir.clone());
         let (paths, _) = Paths::resolve_found("app", Layout::default(), &here);
-        assert!(
-            paths.is_portable(),
-            "`exists()` is true of the file, so this run is already portable"
-        );
+        assert!(paths.is_portable(), "a file satisfies `exists()`");
         assert_eq!(paths.data_root(), sentinel);
         assert!(
             paths.ensure_dirs().is_err(),
-            "nothing can be created beneath a file, which is what makes this worth healing"
+            "nothing can be created beneath a file"
         );
 
-        enable_portable_sentinel(&dir, None)
-            .expect("should heal the stale file rather than fail on it");
-        assert!(
-            sentinel.is_dir(),
-            "the sentinel is the root, so it has to be a directory"
-        );
+        enable_portable_sentinel(&dir, None).expect("should replace the stale file");
+        assert!(sentinel.is_dir());
         paths
             .ensure_dirs()
             .expect("the same run should now have somewhere to write");
 
-        // Enabling twice is the ordinary case - a build that marks itself portable on every
-        // start - and must stay silent.
         enable_portable_sentinel(&dir, None).expect("should be idempotent");
         assert!(sentinel.is_dir());
 
         std::fs::remove_dir_all(&dir).expect("should clean up after itself");
     }
 
+    /// No note writes no file; a note is written verbatim.
     #[test]
     fn the_note_is_the_callers_words_and_no_file_at_all_without_them() {
         let dir = scratch("sentinel-note");
         let sentinel = dir.join(PORTABLE_DIR);
 
-        // Nothing to say, so nothing written. An empty `PORTABLE.txt` would read as a write that
-        // failed, and somebody would eventually go looking for what went wrong with it.
         enable_portable_sentinel(&dir, None).expect("should create the sentinel");
         assert!(sentinel.is_dir());
-        assert!(
-            !sentinel.join(PORTABLE_NOTE).exists(),
-            "no note is the honest answer; an empty one is a puzzle"
-        );
+        assert!(!sentinel.join(PORTABLE_NOTE).exists());
 
-        // The words name a tool, which is why they are the caller's and not this crate's.
         let body = "This directory makes the tool run in portable mode.\n";
         enable_portable_sentinel(&dir, Some(body)).expect("should write the note");
         assert_eq!(
