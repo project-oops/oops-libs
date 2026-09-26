@@ -13,6 +13,7 @@ A crate belongs here when every project needs it and none owns it (D001, D008).
 | `oops-log` | `tracing` set up once; `OOPS_LOG` levels; file and OTLP behind features | `tracing`, `tracing-subscriber` |
 | `oops-paths` | the collection's data and cache roots, portable mode, per-tool config file | `dirs`, behind the default `platform-dirs` feature |
 | `oops-docs` | markdown pages embedded in the binary, and an egui window to read them | `egui`, `pulldown-cmark` |
+| `oops-fetch` | multi-source asset fetching fallback policy: local-first, verify-before-keep | none |
 
 The [guide](docs/USER_GUIDE.md) shows how to use each one.
 

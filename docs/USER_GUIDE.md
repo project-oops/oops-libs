@@ -105,3 +105,32 @@ fn the_registry_is_sound() {
 
 Keep one `DocsWindow`, call `open()` from a menu and `show(ctx, DOCS)` every frame. Register
 pages written for users.
+
+## Fetch fallback policy: `oops-fetch`
+
+Pure fallback policy for tools fetching assets from multiple origins (such as local builds and
+remote mirrors):
+
+```rust
+use oops_fetch::{walk, Origin};
+
+let origins = [
+    "https://mirror1.example.com/asset.bin",
+    "../sibling/dist/asset.bin",
+    "https://mirror2.example.com/asset.bin",
+];
+
+let attempt = walk(
+    &origins,
+    true, // has_digest
+    |origin| fetch_bytes(origin),
+    |bytes| check_sha256(bytes),
+)?;
+
+println!("Retrieved from {} (local: {})", attempt.used, attempt.is_local);
+```
+
+- Local candidates are always attempted before remote mirrors.
+- Remote-only sources with no checkable digest are refused before downloading bytes.
+- When a digest is present, fetched data is verified before acceptance.
+- Every failed candidate and its error reason is reported if all fail.

@@ -68,25 +68,16 @@ pub fn emit() {
 /// Re-runs the build script when the commit moves.
 ///
 /// Watches `HEAD`, the ref it names (which is the file that changes on a branch commit) and
-/// the reflog `logs/HEAD` (which covers packed refs). Only existing paths are named, because
-/// cargo re-runs on every build for a missing one. The index is not watched, so `-dirty` can
-/// lag one build behind an edit.
+/// the reflog `logs/HEAD` (which covers packed refs). In a worktree checkout, `.git` is a
+/// file pointing to the worktree's git directory, and shared refs live under the repository's
+/// `commondir`. Only existing paths are named, because cargo re-runs on every build for a
+/// missing one. The index is not watched, so `-dirty` can lag one build behind an edit.
 fn watch_git() {
-    let Some(root) = repo_root() else { return };
-    let head = root.join("HEAD");
-    if !head.exists() {
+    let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") else {
         return;
-    }
-    println!("cargo:rerun-if-changed={}", head.display());
-    if let Some(reference) = head_reference(&head) {
-        let ref_path = root.join(&reference);
-        if ref_path.exists() {
-            println!("cargo:rerun-if-changed={}", ref_path.display());
-        }
-    }
-    let reflog = root.join("logs").join("HEAD");
-    if reflog.exists() {
-        println!("cargo:rerun-if-changed={}", reflog.display());
+    };
+    for path in git_paths_to_watch(Path::new(&manifest)) {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
 }
 
@@ -101,22 +92,102 @@ fn parse_head_reference(contents: &str) -> Option<String> {
     (!reference.is_empty()).then(|| reference.to_owned())
 }
 
-/// The nearest `.git` directory at or above the crate being built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitDirs {
+    /// Directory holding this checkout's `HEAD` and `logs/HEAD`.
+    git_dir: PathBuf,
+    /// Directory holding shared references (`refs/heads/...`).
+    common_dir: PathBuf,
+}
+
+/// Resolves the git directories for a crate manifest directory.
 ///
-/// `None` when `.git` is a file (a worktree or submodule): its contents never change on a
-/// commit, so there is nothing useful to watch.
-fn repo_root() -> Option<PathBuf> {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
-    let mut dir: Option<&Path> = Some(Path::new(&manifest));
+/// Follows `.git` directories directly, or `.git` files (`gitdir: <path>`) for worktrees.
+/// In a worktree, `commondir` (if present) points to the repository holding shared refs.
+fn resolve_git_dirs(manifest_dir: &Path) -> Option<GitDirs> {
+    let mut dir: Option<&Path> = Some(manifest_dir);
     while let Some(here) = dir {
         let candidate = here.join(".git");
         if candidate.is_dir() {
-            return Some(candidate);
+            return Some(GitDirs {
+                git_dir: candidate.clone(),
+                common_dir: candidate,
+            });
         }
         if candidate.is_file() {
-            return None;
+            let content = std::fs::read_to_string(&candidate).ok()?;
+            let gitdir_str = parse_gitdir_line(&content)?;
+            let git_dir_path = Path::new(&gitdir_str);
+            let git_dir = if git_dir_path.is_absolute() {
+                git_dir_path.to_path_buf()
+            } else {
+                here.join(git_dir_path)
+            };
+            if !git_dir.is_dir() {
+                return None;
+            }
+            let commondir_file = git_dir.join("commondir");
+            let common_dir = if let Ok(common_content) = std::fs::read_to_string(&commondir_file) {
+                let common_str = common_content.trim();
+                let common_path = Path::new(common_str);
+                if common_path.is_absolute() {
+                    common_path.to_path_buf()
+                } else {
+                    git_dir.join(common_path)
+                }
+            } else {
+                git_dir.clone()
+            };
+            return Some(GitDirs {
+                git_dir,
+                common_dir,
+            });
         }
         dir = here.parent();
+    }
+    None
+}
+
+/// The paths to watch for changes to the commit or branch.
+///
+/// Only existing files are returned: `HEAD`, the ref `HEAD` points to (under the common
+/// git directory), and `logs/HEAD`.
+fn git_paths_to_watch(manifest_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let Some(dirs) = resolve_git_dirs(manifest_dir) else {
+        return paths;
+    };
+    let head = dirs.git_dir.join("HEAD");
+    if !head.exists() {
+        return paths;
+    }
+    paths.push(head.clone());
+
+    if let Some(reference) = head_reference(&head) {
+        let ref_path = dirs.common_dir.join(&reference);
+        if ref_path.exists() {
+            paths.push(ref_path);
+        }
+    }
+
+    let reflog = dirs.git_dir.join("logs").join("HEAD");
+    if reflog.exists() {
+        paths.push(reflog);
+    }
+
+    paths
+}
+
+/// Extracts the target path from a `.git` file (`gitdir: <path>`).
+fn parse_gitdir_line(contents: &str) -> Option<String> {
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if let Some(gitdir) = trimmed.strip_prefix("gitdir:") {
+            let path = gitdir.trim();
+            if !path.is_empty() {
+                return Some(path.to_owned());
+            }
+        }
     }
     None
 }
@@ -367,5 +438,95 @@ mod tests {
             built_at: None,
         };
         assert_eq!(nothing.line(), "v0.1.0 - no commit, build time unknown");
+    }
+
+    /// A `gitdir:` line extracts the path to the target git directory.
+    #[test]
+    fn a_gitdir_line_extracts_path() {
+        assert_eq!(
+            parse_gitdir_line("gitdir: /path/to/worktree\n").as_deref(),
+            Some("/path/to/worktree")
+        );
+        assert_eq!(
+            parse_gitdir_line("gitdir:   relative/path  \r\n").as_deref(),
+            Some("relative/path")
+        );
+        assert_eq!(
+            parse_gitdir_line("# comment\ngitdir: /target/dir\n").as_deref(),
+            Some("/target/dir")
+        );
+        assert_eq!(parse_gitdir_line("other: foo"), None);
+        assert_eq!(parse_gitdir_line("gitdir:"), None);
+        assert_eq!(parse_gitdir_line(""), None);
+    }
+
+    /// A standard repository watches its `HEAD`, the ref `HEAD` points to, and `logs/HEAD`.
+    #[test]
+    fn a_standard_git_repo_watches_head_and_refs() {
+        let temp = std::env::temp_dir().join(format!("oops-build-test-std-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let crate_dir = temp.join("repo").join("crates").join("my-crate");
+        let git_dir = temp.join("repo").join(".git");
+
+        std::fs::create_dir_all(&crate_dir).unwrap();
+        std::fs::create_dir_all(git_dir.join("refs").join("heads")).unwrap();
+        std::fs::create_dir_all(git_dir.join("logs")).unwrap();
+
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git_dir.join("refs").join("heads").join("main"), "hash\n").unwrap();
+        std::fs::write(git_dir.join("logs").join("HEAD"), "log\n").unwrap();
+
+        let watched = git_paths_to_watch(&crate_dir);
+        assert_eq!(watched.len(), 3);
+        assert_eq!(watched[0], git_dir.join("HEAD"));
+        assert_eq!(watched[1], git_dir.join("refs").join("heads").join("main"));
+        assert_eq!(watched[2], git_dir.join("logs").join("HEAD"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    /// A worktree checkout watches its own `HEAD`, `logs/HEAD`, and the ref under `commondir`.
+    #[test]
+    fn a_git_worktree_watches_worktree_head_and_common_refs() {
+        let temp = std::env::temp_dir().join(format!("oops-build-test-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+
+        let crate_dir = temp.join("repo-worktree").join("crates").join("my-crate");
+        let worktree_dir = temp.join("repo-worktree");
+        let common_git = temp.join("main-repo").join(".git");
+        let worktree_git = common_git.join("worktrees").join("repo-worktree");
+
+        std::fs::create_dir_all(&crate_dir).unwrap();
+        std::fs::create_dir_all(worktree_git.join("logs")).unwrap();
+        std::fs::create_dir_all(common_git.join("refs").join("heads")).unwrap();
+
+        // Write .git file in worktree pointing to worktree_git
+        std::fs::write(
+            worktree_dir.join(".git"),
+            format!("gitdir: {}\n", worktree_git.display()),
+        )
+        .unwrap();
+
+        // Write HEAD in worktree_git pointing to branch ref
+        std::fs::write(worktree_git.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        // Write commondir pointing to common .git (relative to worktree_git)
+        std::fs::write(worktree_git.join("commondir"), "../..\n").unwrap();
+        // Write logs/HEAD in worktree_git
+        std::fs::write(worktree_git.join("logs").join("HEAD"), "reflog entry\n").unwrap();
+        // Write branch ref in common_git
+        let branch_ref = common_git.join("refs").join("heads").join("feature");
+        std::fs::write(&branch_ref, "0123456789abcdef\n").unwrap();
+
+        let watched = git_paths_to_watch(&crate_dir);
+        assert_eq!(watched.len(), 3);
+        assert_eq!(watched[0], worktree_git.join("HEAD"));
+        assert_eq!(
+            watched[1],
+            worktree_git.join("../..").join("refs/heads/feature")
+        );
+        assert_eq!(watched[2], worktree_git.join("logs").join("HEAD"));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

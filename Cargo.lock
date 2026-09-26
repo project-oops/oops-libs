@@ -646,6 +646,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "oops-fetch"
+version = "0.1.0"
+
+[[package]]
 name = "oops-log"
 version = "0.1.0"
 dependencies = [

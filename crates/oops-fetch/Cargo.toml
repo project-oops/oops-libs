@@ -1,0 +1,13 @@
+[package]
+name = "oops-fetch"
+description = "Pure fallback and verification policy for multi-source asset fetching."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# None. This crate is pure policy: no HTTP client, no manifest type, no platform dependencies.
+[dependencies]
+
+[lints]
+workspace = true
